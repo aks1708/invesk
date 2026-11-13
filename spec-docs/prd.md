@@ -1,8 +1,5 @@
 # Invesk PRD
 
-Governed by [`constitution.md`](./constitution.md); inline references P1–P10
-point to its Core Principles.
-
 ## 1. Problem
 
 Investors are advised to put long-term money into low-to-medium risk
