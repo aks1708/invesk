@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from src.cli.config import EXIT_OK, EXIT_RUNTIME_FAILURE
+from src.cli.spinner import spinner
 from src.core.events import EventEmitter
 from src.extraction.extraction import ExtractionError, FundNotFoundError, extract_fund
 from src.core.models import RunInput
@@ -40,12 +41,50 @@ def _run_pipeline(
     clock: Callable[[], datetime],
     stdout: TextIO,
 ) -> int:
+    """Run the pipeline stages while a tty spinner shows progress.
+
+    The spinner stops and erases its line before the report is printed, so
+    no `Cooking` residue is left on the terminal. The spinner is
+    interactive-only: with a non-tty stdout (piped input, tests) the stages
+    run exactly as before with no output decoration.
+    """
+    with spinner("Cooking", stdout):
+        status, report = _run_stages(
+            run_input,
+            events,
+            yf,
+            run_dir=run_dir,
+            config=config,
+            api_key=api_key,
+            exa_factory=exa_factory,
+            ollama_client_factory=ollama_client_factory,
+            report_writer=report_writer,
+            clock=clock,
+        )
+    if report is not None:
+        write_terminal_report(report, stdout)
+    return status
+
+
+def _run_stages(
+    run_input: RunInput,
+    events: EventEmitter,
+    yf: Any,
+    *,
+    run_dir: Path,
+    config: SearchConfig,
+    api_key: str | None,
+    exa_factory: Callable[[str], Any],
+    ollama_client_factory: Callable[[], Any],
+    report_writer: Callable[..., tuple[str, Path]],
+    clock: Callable[[], datetime],
+) -> tuple[int, str | None]:
     """Run the pipeline stages in order (PRD §7).
 
-    FR2 wires fund data extraction, FR3 news search, and FR4 synthesis;
-    FR5 renders and writes the report. The Exa client is built here from the
-    key the composition root read — only after that key is known to be
-    present; the ollama client needs no key, so it is built unconditionally.
+    Returns `(exit code, terminal report text)`; the report text is not None
+    only on success, so the caller can print it after the spinner clears.
+    The terminal report is intentionally not written here: it would race the
+    spinner animation and the final line erase would hit the report.
     """
     try:
         profile = extract_fund(run_input.fund, yf=yf, events=events)
@@ -55,14 +94,14 @@ def _run_pipeline(
             stage="fund_extraction",
             error_code="fund_not_found",
             detail=str(exc),
-        )
+        ), None
     except ExtractionError as exc:
         return _fail_run(
             events,
             stage="fund_extraction",
             error_code="yahoo_unavailable",
             detail=str(exc),
-        )
+        ), None
 
     events.emit(
         "stage_completed",
@@ -78,7 +117,7 @@ def _run_pipeline(
             stage="news_search",
             error_code="exa_not_configured",
             detail="EXA_API_KEY is not set",
-        )
+        ), None
     try:
         news = search_news(
             profile,
@@ -93,7 +132,7 @@ def _run_pipeline(
             stage="news_search",
             error_code="exa_unavailable",
             detail=str(exc),
-        )
+        ), None
     try:
         client = ollama_client_factory()
     except Exception as exc:
@@ -102,7 +141,7 @@ def _run_pipeline(
             stage="synthesis",
             error_code="ollama_unavailable",
             detail=str(exc),
-        )
+        ), None
     try:
         sections = synthesize(
             profile,
@@ -116,7 +155,7 @@ def _run_pipeline(
             stage="synthesis",
             error_code=exc.error_code,
             detail=str(exc),
-        )
+        ), None
     try:
         report, report_path = report_writer(
             run_dir, profile, news, sections, clock=clock
@@ -127,8 +166,7 @@ def _run_pipeline(
             stage="report",
             error_code="report_write_failed",
             detail=str(exc),
-        )
+        ), None
     events.emit("report_written", stage="report", path=str(report_path))
-    write_terminal_report(report, stdout)
-    return EXIT_OK
+    return EXIT_OK, report
 

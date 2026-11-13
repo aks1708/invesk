@@ -146,8 +146,12 @@ Entities:
 ## 10. Functional Requirements
 
 **FR1 — Input handling.** Input: fund name (string). It must not be empty.
-CLI usage errors exit `2` before any external call. Fund names are accepted as
-free text.
+The application prompts for the fund name; while typing, it shows live fund
+name suggestions from Yahoo (best-effort; selection via Tab, submission via
+Enter with an explicit `[Y/n]` confirmation before the run starts). When
+stdin is not an interactive terminal, the app falls back to a plain prompt.
+Usage errors (empty input, cancelled confirmation) exit `2` before any
+external call. Fund names are accepted as free text.
 
 **FR2 — Fund data extraction.** Fund name → Yahoo ticker lookup via yfinance →
 `FundProfile`; weights and provider formats normalized at the boundary adapter.
@@ -243,7 +247,7 @@ Commands (P10) are documented in the README:
 | Command | Purpose |
 | --- | --- |
 | `pip install -e .` | Install into a virtual environment |
-| `python -m src --fund "..."` | Generate a report (print and write artifacts) |
+| `python -m src` | Ask for a fund name, then generate a report (print and write artifacts) |
 | `pytest` | Core-logic transformation tests (offline) |
 
 Rollback (P7): restore the previous installed version. Degrade mode and

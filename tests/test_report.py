@@ -66,10 +66,42 @@ def test_render_report_has_metadata_data_sections_and_llm_insights():
     assert "## Snapshot\n\nVanguard FTSE 250 UCITS ETF is a Vanguard fund." in report
     assert "Balfour Beatty PLC (1.38%)" in report
     assert "industrials (20.55%)" in report
-    assert "## Financial health\n\nAvailable fund-level metrics: Total Assets: 2.15 billion." in report
+    assert (
+        "## Financial health\n\n| Metric | Value | What it means |\n"
+        "| --- | --- | --- |\n| Total Assets | 2.15 billion | The total market "
+        "value of everything the fund owns."
+    ) in report
     assert "## Company insights\n\nCompany text. [1]" in report
     assert "## Sector insights\n\nSector text. [1]" in report
-def test_render_report_lists_sources_with_url_source_and_date():
+
+
+def test_render_report_financial_health_table_has_context_and_disclaimer():
+    from dataclasses import replace
+
+    profile = replace(
+        make_profile(),
+        overview={"totalAssets": 2148292608, "unlistedMetric": "42"},
+    )
+    report = render_report(profile, [make_news()], make_sections(), generated_at=FIXED_NOW)
+
+    table = report.split("## Financial health\n\n", 1)[1].split("\n\n", 1)[0]
+    rows = [line for line in table.splitlines() if line.startswith("| ") and "---" not in line]
+    labels = [row.split(" | ")[0].lstrip("| ") for row in rows]
+    assert labels == ["Metric", "Total Assets", "Unlisted Metric"]
+    assert rows[1].endswith(
+        "A large, stable asset base usually signals an established fund, "
+        "though very large funds can find it harder to trade in and out of "
+        "positions. |"
+    )
+    assert rows[2].endswith(
+        "Yahoo reports this figure for the fund; check the fund's factsheet "
+        "for its exact definition. |"
+    )
+    assert (
+        "These figures describe the fund, not the financial health of "
+        "each company it holds." in report
+    )
+def test_render_report_lists_only_cited_sources_as_numbered_links():
     news = [
         make_news(),
         make_news(
@@ -83,14 +115,36 @@ def test_render_report_lists_sources_with_url_source_and_date():
         make_profile(), news, make_sections(), generated_at=FIXED_NOW
     )
 
-    assert (
-        "1. [Balfour wins contract](https://news.example/balfour) — example.news, 2026-11-01"
-        in report
+    assert "1. [Balfour wins contract](https://news.example/balfour)" in report
+    assert "WPP cuts guidance" not in report
+
+
+def test_render_report_sources_combine_citations_from_both_insight_sections():
+    news = [
+        make_news(),
+        make_news(
+            title="WPP cuts guidance",
+            url="https://news.example/wpp",
+            source="market.wire",
+            related=("WPP",),
+        ),
+        make_news(
+            title="Unrelated item",
+            url="https://news.example/other",
+            source="other.wire",
+            related=("Other",),
+        ),
+    ]
+    sections = ReportSections(
+        company_insights="Company text. [1]",
+        sector_insights="Sector text. [3]",
     )
-    assert (
-        "2. [WPP cuts guidance](https://news.example/wpp) — market.wire, date unknown"
-        in report
-    )
+
+    report = render_report(make_profile(), news, sections, generated_at=FIXED_NOW)
+
+    assert "1. [Balfour wins contract](https://news.example/balfour)" in report
+    assert "3. [Unrelated item](https://news.example/other)" in report
+    assert "WPP cuts guidance" not in report
 
 
 def test_render_report_preserves_citation_markers_and_source_numbering():

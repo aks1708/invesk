@@ -58,10 +58,20 @@ model for writing insights.
 
 ## Run a report
 
-Pass a fund name with `--fund` (use quotes when it contains spaces):
+Run the app and enter a fund name when asked:
 
 ```bash
-.venv/bin/python -m src --fund "Vanguard FTSE 250"
+.venv/bin/python -m src
+# Fund name: Vanguard FTSE 250
+```
+
+As you type, fund name suggestions from Yahoo Finance appear — type to filter,
+Tab to cycle through them, Enter to accept a suggestion (or keep the name you
+typed), then confirm the run at `Start analysis for '...'? [Y/n]`: Enter or `y`
+starts it, `n` returns to editing, and Ctrl-D cancels. Piped input works too:
+
+```bash
+echo "Vanguard FTSE 250" | .venv/bin/python -m src
 ```
 
 The report appears in your terminal and is saved in a new run folder, for
