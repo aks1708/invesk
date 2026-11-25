@@ -9,22 +9,21 @@ the `ollama` Python client connected to the local Ollama server, which uses the
 Ollama Cloud session, `client.chat(model=…, messages=…, options=…)`.
 
 All reports use simple language. The model response contains only company and
-sector insights; FR5 builds the snapshot and metric summary directly from
-`FundProfile`. `ReportSections` carries only the two LLM-written insight
-sections; report rendering consumes those insights and the fund profile
-separately.
+sector insights; FR5 builds the metric summary directly from `FundProfile`.
+`ReportSections` carries only the two LLM-written insight sections; report
+rendering consumes those insights and the fund profile separately.
 
 ## Model
 
 `gemma4:cloud` — a module constant (`SYNTHESIS_MODEL`), not configuration
-(PRD §3, §17 Q4; the Google boundary used `gemma-4-31b-it`). Passed as the
+(the Google boundary used `gemma-4-31b-it`). Passed as the
 `model` argument of every `chat` call.
 
 ## Auth
 
 Authenticate Ollama Cloud in the terminal with `ollama signin`. The local
 Ollama server uses that signed-in session for `gemma4:cloud`; the application
-does not need `OLLAMA_HOST` or `OLLAMA_API_KEY` configuration (PRD §13). No
+does not need `OLLAMA_HOST` or `OLLAMA_API_KEY` configuration (PRD §12). No
 credentials are logged, written to events or artifacts, or embedded in a prompt.
 
 ## Request
@@ -34,12 +33,12 @@ One `chat` call per attempt:
 | Argument | Value | Notes |
 | --- | --- | --- |
 | `model` | `SYNTHESIS_MODEL` | `gemma4:cloud` |
-| `messages` | `[{"role": "user", "content": <prompt>}]` | One user prompt — the insights-only task, simple-language guidance, fund composition context, news, and output schema. Sent as plain dicts, which the SDK converts to its typed models. No system message: the Gemma model family rejects it, so everything rides in the single user message. |
+| `messages` | `[{"role": "user", "content": <prompt>}]` | FR4 intentionally sends one user prompt containing the insights-only task, simple-language guidance, fund composition context, news, and output schema. This is independent of FR7's Q&A system/user message structure. |
 | `options` | `{"temperature": 0}` | Deterministic synthesis; the context window and generation cap stay at the server's defaults. No `format` (Gemma does not reliably support JSON mode), no tools, no thinking config. |
 
 Client options: `Client(timeout=120.0)` — the 120 s of the Google boundary's
 `GOOGLE_TIMEOUT_SECONDS`, in seconds. The composition root builds the client
-via `synthesis.ollama_client`, whose SDK import is deferred (P3).
+via `synthesis.ollama_client`, whose SDK import is deferred.
 
 ## Response (a `ChatResponse`)
 
@@ -63,7 +62,7 @@ This boundary does **not** retry provider errors (the FR4 corrective retry
 is for malformed *output* only): a failed call is logged (`external_call`
 `status=error`, `http_status` when the exception carries an int
 `.status_code`) and raises `SynthesisError` → `run_failed`
-`ollama_unavailable`, exit 1. A client-construction failure (e.g. the SDK is
+`ollama_unavailable` and marks the report run as failed. A client-construction failure (e.g. the SDK is
 not installed) is also `ollama_unavailable`, before any dial-out. Error
 messages contain provider text only — never a key or prompt.
 
@@ -148,7 +147,7 @@ output schema is required — do not omit any, and leave none empty.
 ```
 
 A second malformed response raises `SynthesisError` → `run_failed`
-`synthesis_failed`, exit 1.
+`synthesis_failed` and marks the report run as failed.
 
 ## Boundary adapter validation (model text → ReportSections)
 
@@ -194,5 +193,5 @@ call. The stage then emits `stage_completed` `synthesis` with
 One run makes 1–2 Ollama calls after a successful search stage. A cloud
 model needs an authenticated Ollama session (`ollama signin`); otherwise the
 call fails and the run aborts (see Errors). If the
-boundary breaks, revert to the previous installed version (P7); there are no
+boundary breaks, restore the previous working version; there are no
 synthesis knobs to reconfigure.

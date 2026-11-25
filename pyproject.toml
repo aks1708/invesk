@@ -15,8 +15,9 @@ dependencies = [
     "exa-py==2.28.0",
     # FR4: LLM synthesis via the Ollama Python client (contracts/ollama.v1.md)
     "ollama==0.6.3",
-    # FR5: colored report sections in interactive terminals
-    "colorama==0.4.6",
+    # FR8: local browser API
+    "fastapi==0.115.8",
+    "uvicorn==0.34.0",
 ]
 
 [project.optional-dependencies]

@@ -11,9 +11,9 @@ schema are unchanged, so the schema version stays 1).
 ## Auth
 
 `x-api-key: <EXA_API_KEY>` header, sent by the SDK. The key comes from the
-`EXA_API_KEY` environment variable (read only at the composition root, PRD
-§13) and is passed to `Exa(api_key, timeout=30.0)` — the client factory lives
-in `cli.py` (P3). The key is never logged, never written to events or
+`EXA_API_KEY` environment variable (read at the composition root) and is passed
+to `Exa(api_key, timeout=30.0)` — the client factory lives in
+`src.search.search`. The key is never logged, never written to events or
 artifacts, and never embedded in prompts.
 
 ## Request
@@ -74,7 +74,7 @@ tiers; 5 QPS for `deep` types, which invesk does not use). Default
 `max_parallel=4` workers keep ≤ 10 searches well under that limit. Exceeding it
 returns 429, which v1 logs and skips.
 
-## Config caps (FR3; configuration, not code — P7)
+## Config caps (FR3)
 
 | Setting | Env var | Default | Meaning |
 | --- | --- | --- | --- |
@@ -84,7 +84,8 @@ returns 429, which v1 logs and skips.
 | `max_parallel` | `EXA_MAX_PARALLEL` | 4 | Worker threads (QPS guard) |
 | `degrade_on_total_failure` | `EXA_DEGRADE_ON_FAILURE` | true | Total search failure → fund-data-only run (`degraded` event) instead of aborting |
 
-Invalid values are usage errors (exit 2) detected before any external call.
+Invalid values are rejected before any provider search. A browser run fails
+with a configuration error recorded in its event stream.
 
 ## Query fan-out (FR3)
 
@@ -115,7 +116,7 @@ importance order, then rank). Counted drops are not errors.
 
 ## NewsItem entity (schema_version 2)
 
-Schema 2 note (changed from 1, P4): `content` is added — the result's page
+Schema 2 note (changed from 1): `content` is added — the result's page
 text, requested (first 10000 characters) alongside the summary.
 
 | Field | Type | Notes |
@@ -145,5 +146,5 @@ id. The stage then emits `stage_completed` `news_search` with `searches`,
 ## Rate/fragility notes
 
 One run makes ≤ `max_searches` Exa calls after a successful extraction. If the
-boundary breaks, revert to the previous installed version (P7); caps and
-degrade mode are configuration, not code.
+boundary breaks, restore the previous working version; caps and degrade mode
+are configuration.

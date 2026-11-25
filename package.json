@@ -1,0 +1,12 @@
+{
+  "name": "invesk",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace invesk-web",
+    "build": "npm run build --workspace invesk-web",
+    "preview": "npm run preview --workspace invesk-web"
+  }
+}

@@ -1,12 +1,6 @@
-"""Transformation tests for fund-name suggestions (FR1 input UX)."""
+"""Transformation tests for browser fund-name suggestions."""
 
-import io
-
-import pytest
-
-from src.cli.app import _read_input
-from src.cli.config import UsageError, validate
-from src.cli.suggest import cached_suggester, yf_suggester
+from src.fund_suggestions import cached_suggester, yf_suggester
 
 
 class _FakeSearch:
@@ -134,18 +128,3 @@ def test_cached_suggester_refetches_same_query_once_and_swallows_errors() -> Non
     cached = cached_suggester(lambda query: ["Fund B"])
     assert cached("fund") == ["Fund B"]
     assert cached("fund") == ["Fund B"]  # cache hit, suggester not called again
-
-
-def test_read_input_plain_prompt_when_not_a_tty() -> None:
-    run_input = _read_input(io.StringIO("Vanguard FTSE 250\n"), io.StringIO(), None)
-    assert run_input.fund == "Vanguard FTSE 250"
-
-
-def test_read_input_plain_prompt_eof_is_usage_error() -> None:
-    with pytest.raises(UsageError):
-        _read_input(io.StringIO(""), io.StringIO(), None)
-
-
-def test_validate_still_rejects_blank_fund() -> None:
-    with pytest.raises(UsageError):
-        validate("   ")

@@ -60,12 +60,12 @@ def test_render_report_has_metadata_data_sections_and_llm_insights():
         make_profile(), [make_news()], make_sections(), generated_at=FIXED_NOW
     )
 
-    assert report.startswith("# Invesk report — Vanguard FTSE 250\n")
-    assert "- Fund: Vanguard FTSE 250 UCITS ETF (Currency: GBp)" in report
-    assert "- Generated: 12-11-2026 12:00" in report
-    assert "## Snapshot\n\nVanguard FTSE 250 UCITS ETF is a Vanguard fund." in report
-    assert "Balfour Beatty PLC (1.38%)" in report
-    assert "industrials (20.55%)" in report
+    assert report.startswith("# Vanguard FTSE 250 UCITS ETF (Currency: GBp)\n")
+    assert "\nGenerated: 12-11-2026 12:00\n" in report
+    assert "- Fund:" not in report
+    assert "## Snapshot" not in report
+    assert "Balfour Beatty PLC (1.38%)" not in report
+    assert "industrials (20.55%)" not in report
     assert (
         "## Financial health\n\n| Metric | Value | What it means |\n"
         "| --- | --- | --- |\n| Total Assets | 2.15 billion | The total market "

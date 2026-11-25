@@ -13,7 +13,7 @@ from src.core.models import FundProfile, Holding
 #: rejected so a company share can never masquerade as the named fund.
 FUND_QUOTE_TYPES = ("ETF", "MUTUALFUND")
 
-#: Curated fund-level metrics presented in the report snapshot/overview (PRD §10).
+#: Curated fund-level metrics presented in the report overview (PRD §10).
 #: Extended 2026-11-13 with the fund-performance metrics an investor reads
 #: first: returns (`trailingThreeMonthReturns` joins `ytdReturn` and the
 #: three-/five-year averages), cost (`dividendRate` aside, see below),
@@ -293,5 +293,4 @@ def build_profile(
         overview=overview,
         gaps=tuple(gaps),
     )
-
 

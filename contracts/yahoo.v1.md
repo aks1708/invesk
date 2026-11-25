@@ -11,7 +11,7 @@ no REST code and no API key (PRD §9).
 | --- | --- | --- |
 | 1 | `yfinance.Search(fund, max_results=5).quotes` | List of quote dicts. Empty list ⇒ not found. |
 | 2 | Filter | First quote whose `quoteType` is `ETF` or `MUTUALFUND` **and** that has a non-empty `symbol`. Other quote types (EQUITY, INDEX, …) are skipped so a company share can never masquerade as the named fund. |
-| 3 | No match | `FundNotFoundError` → `run_failed` `fund_not_found`, exit 1. |
+| 3 | No match | `FundNotFoundError` → `run_failed` `fund_not_found`. |
 
 Quote fields used: `symbol`, `longname`, `quoteType`.
 
@@ -26,7 +26,7 @@ Quote fields used: `symbol`, `longname`, `quoteType`.
 | `…funds_data.fund_overview` | Dict of `categoryName`, `family`, `legalType` | `overview.category`; `family` fallback when `info.fundFamily` is absent (it is, for most funds) |
 
 Any exception from these calls (HTTPError, timeout, parse failure) becomes
-`ExtractionError` → `run_failed` `yahoo_unavailable`, exit 1.
+`ExtractionError` → `run_failed` `yahoo_unavailable`.
 
 ## Boundary adapter normalization (Yahoo formats → FundProfile)
 
@@ -52,13 +52,13 @@ against VOO, VFIAX, and 0P0000K0QF): **every percent-denominated value in a
 FundProfile is a percent value — 10 means 10%, never 0.1.** `beta3Year`,
 the Morningstar ratings, and amounts stay numeric; rendering them (2.15
 billion, 3-year beta 0.97) is the FR4/FR5 presentation concern
-(`src/core/formatting.py`). Re-verify the field units if the boundary changes
-(P7). Yahoo populates the performance fields unevenly per fund — missing
+(`src/core/formatting.py`). Re-verify the field units if the boundary changes.
+Yahoo populates the performance fields unevenly per fund — missing
 fields are omitted, never defaulted (see the normalization table).
 
 ## FundProfile entity (schema_version 2)
 
-Schema 2 note (changed from 1, P4, 2026-11-13): `overview` is extended with
+Schema 2 note (changed from 1, 2026-11-13): `overview` is extended with
 the fund-performance metrics — `trailingThreeMonthReturns`,
 `annualHoldingsTurnover`, `dividendRate`, `dividendYield`, `beta3Year`,
 `morningStarOverallRating`, `morningStarRiskRating`, `inception`, and
@@ -87,10 +87,10 @@ Every Yahoo call emits one `external_call` event (`contracts/events.v1.md`):
 `provider` (`yahoo.search` | `yahoo.quote_summary`), `latency_ms`, `status`
 (`ok` | `error`). Library calls return no request id, so `request_id` is
 omitted. A successful search that finds no fund is still `status=ok`; the
-`fund_not_found` failure is recorded by the CLI's `run_failed`.
+`fund_not_found` failure is recorded by the run's `run_failed` event.
 
 ## Rate limits / fragility
 
 One run makes 2 Yahoo calls (search + quote summary); no rate limiting is
-configured in v1. Yahoo rate limits and scraping fragility are PRD §17 Q3 —
-if the boundary breaks, revert to the previous installed version (P7).
+configured in v1. Yahoo rate limits and scraping fragility remain operational
+risks (PRD §16); restore the previous working version if the boundary breaks.

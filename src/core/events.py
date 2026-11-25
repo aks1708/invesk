@@ -23,6 +23,16 @@ EVENT_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
     "token_usage": ("provider", "prompt_tokens", "completion_tokens"),
     "report_written": ("path",),
     "run_failed": ("error_code", "detail"),
+    "qa_started": ("news", "model"),
+    "qa_answered": (
+        "citations",
+        "passages",
+        "evidence_chars",
+        "latency_ms",
+        "attempts",
+        "insufficient",
+    ),
+    "qa_failed": ("error_code", "detail"),
 }
 
 Clock = Callable[[], datetime]

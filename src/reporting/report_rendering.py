@@ -43,13 +43,9 @@ def render_report(
 ) -> str:
     """FundProfile + NewsItem[] + ReportSections → the markdown report."""
     lines = [
-        f"# Invesk report — {profile.fund}",
+        f"# {profile.name} (Currency: {profile.currency or 'Unknown'})",
         "",
-        f"- Fund: {profile.name} (Currency: {profile.currency or 'Unknown'})",
-        f"- Generated: {_format_report_timestamp(generated_at)}",
-        "",
-        "## Snapshot\n",
-        _snapshot_text(profile),
+        f"Generated: {_format_report_timestamp(generated_at)}",
         "",
         "## Financial health\n",
         _financial_health_text(profile),
@@ -74,38 +70,6 @@ def render_report(
     else:
         lines.append("None found in this run.")
     return "\n".join(lines) + "\n"
-
-
-def _snapshot_text(profile: FundProfile) -> str:
-    """Describe available fund composition without model-generated claims."""
-    parts = (
-        [f"{profile.name} is a {profile.family} fund."]
-        if profile.family
-        else [f"{profile.name} is an investment fund."]
-    )
-    if profile.holdings:
-        top = sorted(profile.holdings, key=lambda holding: holding.weight, reverse=True)[:5]
-        parts.append(
-            "Its largest reported holdings are "
-            + ", ".join(
-                f"{holding.name} ({format_percent(holding.weight)})" for holding in top
-            )
-            + "."
-        )
-    else:
-        parts.append("Top holdings information is not available.")
-    if profile.sector_weights:
-        sectors = sorted(
-            profile.sector_weights.items(), key=lambda item: item[1], reverse=True
-        )[:5]
-        parts.append(
-            "Its largest reported sector allocations are "
-            + ", ".join(f"{name} ({format_percent(weight)})" for name, weight in sectors)
-            + "."
-        )
-    else:
-        parts.append("Sector allocation information is not available.")
-    return " ".join(parts)
 
 
 #: Investor-facing explanation per overview metric, shown in the Financial
@@ -256,5 +220,3 @@ def _overview_display(
         else:
             formatted[key] = str(value)
     return formatted
-
-

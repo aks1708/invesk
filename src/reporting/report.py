@@ -12,6 +12,5 @@ from src.reporting.report_rendering import (
     _financial_health_text,
     _metric_label,
     _overview_display,
-    _snapshot_text,
     render_report,
 )

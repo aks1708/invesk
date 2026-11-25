@@ -1,4 +1,4 @@
-"""CLI input and environment configuration transformations."""
+"""Shared environment and run configuration."""
 
 import os
 import re
@@ -7,29 +7,20 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.core.models import RunInput
 from src.search.search import SearchConfig
 
 EXIT_OK = 0
 EXIT_RUNTIME_FAILURE = 1
-EXIT_USAGE = 2
 DEFAULT_ENV_FILE = Path(".env")
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 class UsageError(Exception):
-    """Invalid CLI input; exits 2 before any external call (PRD FR1)."""
-
-
-def validate(fund: str | None) -> RunInput:
-    """Validate raw CLI input per FR1: fund name must be non-empty."""
-    if fund is None or not fund.strip():
-        raise UsageError("fund name must be a non-empty string")
-    return RunInput(fund=fund.strip())
+    """Invalid application configuration detected before external calls."""
 
 
 def slugify(fund: str) -> str:
-    """Filesystem-safe artifact slug from a fund name (PRD §10).
+    """Filesystem-safe artifact slug from a fund name.
 
     Keeps only [a-z0-9-], so the result can never traverse paths.
     """
@@ -38,7 +29,7 @@ def slugify(fund: str) -> str:
 
 
 def default_run_id() -> str:
-    """Unique run id: UTC timestamp plus a random suffix (PRD §10)."""
+    """Unique run id: UTC timestamp plus a random suffix."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{stamp}-{uuid.uuid4().hex[:8]}"
 
@@ -47,7 +38,7 @@ def read_env_file(path: Path) -> dict[str, str]:
     """Parse a `.env` file: `KEY=VALUE` lines, `#` comments, optional quotes.
 
     Values may contain `=` (API keys are often base64). Malformed lines are
-    skipped; the file is only read here, at the composition root (P3).
+    skipped; the file is only read here, at the composition root.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -73,7 +64,7 @@ def compose_env(env: Mapping[str, str] | None) -> dict[str, str]:
 
     Explicit mappings (tests, embedders) are authoritative and never touch
     the `.env` file. The default path reads the process environment and lets
-    `.env` fill only unset variables (P3: one composition-root read).
+    `.env` fill only unset variables.
     """
     if env is not None:
         return dict(env)
@@ -125,5 +116,3 @@ def parse_search_config(env: Mapping[str, str]) -> SearchConfig:
         max_parallel=_int_env(env, "EXA_MAX_PARALLEL", 4),
         degrade_on_total_failure=_bool_env(env, "EXA_DEGRADE_ON_FAILURE", True),
     )
-
-

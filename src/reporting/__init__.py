@@ -1,1 +1,1 @@
-"""Report rendering, artifact writing, and terminal presentation."""
+"""Report rendering and artifact writing."""

@@ -1,23 +1,22 @@
-"""Run extraction, search, synthesis, and report stages in order."""
+"""Shared extraction, search, synthesis, and report pipeline."""
 
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
-from src.cli.config import EXIT_OK, EXIT_RUNTIME_FAILURE
-from src.cli.spinner import spinner
+from src.core.config import EXIT_OK, EXIT_RUNTIME_FAILURE
 from src.core.events import EventEmitter
-from src.extraction.extraction import ExtractionError, FundNotFoundError, extract_fund
 from src.core.models import RunInput
+from src.extraction.extraction import ExtractionError, FundNotFoundError, extract_fund
 from src.search.search import SearchConfig, SearchError, search_news
 from src.synthesis.synthesis import SynthesisError, synthesize
-from src.reporting.terminal import write_terminal_report
+
 
 def _fail_run(
     events: EventEmitter, *, stage: str, error_code: str, detail: str
 ) -> int:
-    """Record a failed stage and return the runtime-failure exit code."""
+    """Record a failed stage and return the runtime-failure status."""
     events.emit(
         "run_failed",
         stage=stage,
@@ -25,45 +24,6 @@ def _fail_run(
         detail=detail,
     )
     return EXIT_RUNTIME_FAILURE
-
-
-def _run_pipeline(
-    run_input: RunInput,
-    events: EventEmitter,
-    yf: Any,
-    *,
-    run_dir: Path,
-    config: SearchConfig,
-    api_key: str | None,
-    exa_factory: Callable[[str], Any],
-    ollama_client_factory: Callable[[], Any],
-    report_writer: Callable[..., tuple[str, Path]],
-    clock: Callable[[], datetime],
-    stdout: TextIO,
-) -> int:
-    """Run the pipeline stages while a tty spinner shows progress.
-
-    The spinner stops and erases its line before the report is printed, so
-    no `Cooking` residue is left on the terminal. The spinner is
-    interactive-only: with a non-tty stdout (piped input, tests) the stages
-    run exactly as before with no output decoration.
-    """
-    with spinner("Cooking", stdout):
-        status, report = _run_stages(
-            run_input,
-            events,
-            yf,
-            run_dir=run_dir,
-            config=config,
-            api_key=api_key,
-            exa_factory=exa_factory,
-            ollama_client_factory=ollama_client_factory,
-            report_writer=report_writer,
-            clock=clock,
-        )
-    if report is not None:
-        write_terminal_report(report, stdout)
-    return status
 
 
 def _run_stages(
@@ -78,14 +38,11 @@ def _run_stages(
     ollama_client_factory: Callable[[], Any],
     report_writer: Callable[..., tuple[str, Path]],
     clock: Callable[[], datetime],
+    on_stage_started: Callable[[str], None] | None = None,
 ) -> tuple[int, str | None]:
-    """Run the pipeline stages in order (PRD §7).
-
-    Returns `(exit code, terminal report text)`; the report text is not None
-    only on success, so the caller can print it after the spinner clears.
-    The terminal report is intentionally not written here: it would race the
-    spinner animation and the final line erase would hit the report.
-    """
+    """Run the report stages in order and return status plus Markdown."""
+    if on_stage_started is not None:
+        on_stage_started("fund_extraction")
     try:
         profile = extract_fund(run_input.fund, yf=yf, events=events)
     except FundNotFoundError as exc:
@@ -111,6 +68,8 @@ def _run_stages(
         sectors=len(profile.sector_weights),
         gaps=len(profile.gaps),
     )
+    if on_stage_started is not None:
+        on_stage_started("news_search")
     if api_key is None:
         return _fail_run(
             events,
@@ -133,6 +92,8 @@ def _run_stages(
             error_code="exa_unavailable",
             detail=str(exc),
         ), None
+    if on_stage_started is not None:
+        on_stage_started("synthesis")
     try:
         client = ollama_client_factory()
     except Exception as exc:
@@ -156,6 +117,8 @@ def _run_stages(
             error_code=exc.error_code,
             detail=str(exc),
         ), None
+    if on_stage_started is not None:
+        on_stage_started("report")
     try:
         report, report_path = report_writer(
             run_dir, profile, news, sections, clock=clock
@@ -169,4 +132,3 @@ def _run_stages(
         ), None
     events.emit("report_written", stage="report", path=str(report_path))
     return EXIT_OK, report
-

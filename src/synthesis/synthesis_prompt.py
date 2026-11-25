@@ -213,7 +213,7 @@ def request_messages(prompt: str) -> list[dict[str, Any]]:
     """The chat messages (contracts/ollama.v1.md).
 
     One user message — the task, simple-language guidance, fund data, news,
-    and output schema. No system message: the Gemma family rejects it.
+    and output schema. FR4 intentionally keeps its existing request shape.
     Plain dicts — the SDK converts them to its typed models, keeping this
     module free of SDK imports.
     """

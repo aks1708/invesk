@@ -4,32 +4,33 @@ The payload `schema_version` values below describe the current artifact formats
 and are independent of this document's contract version.
 
 Producer: the `src.reporting.report` module. Consumers: anything reading a run's
-`output/<fund-slug>/<run_id>/` directory (PRD §10). `events.jsonl` is covered
+`output/<fund-slug>/<run_id>/` directory (PRD §9). `events.jsonl` is covered
 by [`events.v1.md`](./events.v1.md).
 
 ## Encoding
 
-The report metadata omits an audience-level line. UTF-8. JSON artifacts are
-one JSON object with LF endings, written
-`indent=2`, `ensure_ascii=False`. A run's three files are written together
-(`fund_profile.json`, `news.json`, then `report.md`); a write failure aborts
-the run with exit `1`.
+UTF-8. JSON artifacts are one JSON object with LF endings, written with
+`indent=2` and `ensure_ascii=False`. The files are written in sequence:
+`fund_profile.json`, `news.json`, then `report.md`. A write failure aborts the
+run with exit `1`; the sequence is not an atomic transaction.
 
 ## `report.md`
 
-Human-readable markdown:
+Plain human-readable Markdown, returned by the browser API and rendered by the
+frontend:
 
-- `# Invesk report — <fund name>` title, followed by fund name and currency,
-  then generated-at (UTC, formatted `DD-MM-YYYY HH:MM`) as metadata lines.
-- `## Snapshot` and `## Financial health` — composition and metric values
-  assembled directly from `FundProfile` (not LLM analysis).
+- `# <fund name> (Currency: <currency>)` title, followed by generated-at
+  (UTC, formatted `DD-MM-YYYY HH:MM`) as plain text.
+- `## Financial health` — metric values assembled directly from
+  `FundProfile` (not LLM analysis).
 - `## Company insights` and `## Sector insights` — the validated FR4
   `ReportSections` verbatim, written in simple language for a general reader.
 - `## Data gaps` — one bullet per `FundProfile.gaps` entry; the section is
   omitted when there are none.
-- `## Sources` — one numbered entry per `NewsItem`: `[title](url) — source,
-  published date` (date `unknown` when absent); "None found in this run."
-  when the news list is empty.
+- `## Sources` — one numbered entry per cited `NewsItem`, with the number
+  retaining its position in the complete `news.json` array. Entries use
+  `[title](url)`; when the news list is empty, the report says
+  "None found in this run." Uncited items remain in `news.json` only.
 
 ## `fund_profile.json`
 

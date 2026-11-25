@@ -2,7 +2,7 @@
 
 **Understand a fund before you invest in it.**
 
-Invesk is a command-line research tool that turns a fund name into a readable
+Invesk is a local browser research tool that turns a fund name into a readable
 overview of what it holds and what recent news could mean for its companies and
 sectors. Instead of making you research every holding yourself, it gathers fund
 data, looks for relevant news, and brings the findings together in one cited
@@ -21,17 +21,20 @@ For a fund you name, Invesk:
 2. Searches recent news about the largest holdings and sectors.
 3. Uses Gemma 4 through Ollama to explain relevant company and sector
    developments in plain language, with numbered citations to sources.
-4. Prints the report in your terminal and saves it, along with the supporting
-   data, under `output/`.
+4. Shows the report and a run-scoped chat together in the browser, and lets you
+   search all articles collected for that run.
+5. Grounds follow-up questions in the run's saved news first, with a web-search
+   fallback when those sources are insufficient.
 
-The fund snapshot and metrics come from fund data; the AI writes only the news
+Fund-level metrics come directly from fund data; the AI writes only the news
 insights. Invesk does not predict share prices.
 
 ## Get started
 
-You’ll need **Python 3.11 or newer**, an [**Exa API key**](https://exa.ai/),
-and the [**Ollama CLI**](https://ollama.com/download) with access to Ollama
-Cloud.
+You’ll need **Python 3.11 or newer**, **Node.js 18 or newer** to build and run
+the browser frontend in development, an [**Exa API key**](https://exa.ai/),
+and the [**Ollama CLI**](https://ollama.com/download) to sign in to Ollama
+Cloud. Invesk itself is used through the browser.
 
 From the project directory, create an environment and install Invesk:
 
@@ -53,40 +56,44 @@ ollama signin
 ```
 
 No Yahoo Finance key or local model download is required. Invesk uses Yahoo
-Finance for fund data, Exa for news search, and Ollama Cloud's `gemma4:cloud`
-model for writing insights.
+Finance for fund data, Exa for report news search and optional Q&A web search,
+and Ollama Cloud's `gemma4:cloud` model for insights and answers. Completed
+reports and their supporting artifacts are saved under `output/`.
 
-## Run a report
+## Run Invesk in your browser
 
-Run the app and enter a fund name when asked:
+The browser app generates a report and opens a run-scoped chat automatically.
+It also lets you search and read all articles collected for that run; searching
+the article list does not make new web requests.
+As you type at least two characters in the fund field, Yahoo fund suggestions
+appear. Use the up and down arrow keys to choose a suggestion, or click one;
+**Analyze fund** is enabled after you choose a match. If no suggestions are
+available, you can analyze the fund name you typed.
+
+Install the frontend dependencies from the project root:
 
 ```bash
-.venv/bin/python -m src
-# Fund name: Vanguard FTSE 250
+npm install
 ```
 
-As you type, fund name suggestions from Yahoo Finance appear — type to filter,
-Tab to cycle through them, Enter to accept a suggestion (or keep the name you
-typed), then confirm the run at `Start analysis for '...'? [Y/n]`: Enter or `y`
-starts it, `n` returns to editing, and Ctrl-D cancels. Piped input works too:
+For local development, start the API and frontend in separate terminals from
+the project directory:
 
 ```bash
-echo "Vanguard FTSE 250" | .venv/bin/python -m src
+INVESK_WEB_PORT=8001 .venv/bin/python -m src.web
 ```
 
-The report appears in your terminal and is saved in a new run folder, for
-example:
-
-```text
-output/vanguard-ftse-250/<run-id>/
-├── report.md          # Readable report with citations
-├── fund_profile.json  # Retrieved fund details and metrics
-├── news.json          # News collected for the report
-└── events.jsonl       # Run progress and diagnostics
+```bash
+VITE_API_TARGET=http://127.0.0.1:8001 npm run dev
 ```
 
-Open `report.md` to read or share the report. If a run fails, check
-`events.jsonl` for the stage and error details.
+Open <http://127.0.0.1:5173>. The API is available on localhost port 8001
+by default; set `INVESK_WEB_PORT` and `VITE_API_TARGET` together to use a
+different port. Report generation requires `EXA_API_KEY` and an Ollama Cloud
+sign-in. Chat requires Ollama sign-in; `EXA_API_KEY` enables its optional web
+fallback. To build the browser app, run `npm run build` from the project root.
+Then start `.venv/bin/python -m src.web` and open <http://127.0.0.1:8001>;
+the API serves the built frontend from `frontend/dist/`.
 
 ## Configure news search (optional)
 
@@ -124,15 +131,19 @@ and an Ollama Cloud sign-in:
 
 ## Contracts
 
-The external boundaries and saved run formats are documented in the current
-**v1 contracts**:
+The external boundaries and saved run formats are documented in the contracts
+below. A contract document's version is separate from payload schema versions;
+for example, the Q&A contract is v2, the browser API contract is v3, and the
+event contract is v2.
 
 - [Yahoo Finance fund data](contracts/yahoo.v1.md)
 - [Exa news search](contracts/exa.v1.md)
 - [Ollama / Gemma synthesis](contracts/ollama.v1.md)
+- [Q&A over a saved run](contracts/qa.v1.md)
+- [Local browser API](contracts/web.v1.md)
 - [Run artifacts](contracts/artifacts.v1.md)
 - [`events.jsonl`](contracts/events.v1.md)
 
-The `v1` here is the contract document version. Schema versions inside the
-contracts (for example, the versions of `FundProfile` and saved JSON files) are
-tracked independently.
+The filename suffix reflects the original contract file name; the current
+document version is stated in each contract heading. Payload schema versions
+(for example, `FundProfile` and saved JSON files) are tracked independently.

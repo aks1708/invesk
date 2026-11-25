@@ -12,49 +12,72 @@ understand.
 
 ## 2. Solution Overview
 
-Invesk is a Python CLI. The user names a fund (e.g. Vanguard FTSE 250); Invesk
-then:
+Invesk is a local browser application. The user enters a fund name (e.g.
+Vanguard FTSE 250); Invesk then:
 
-1. **Extracts** the fund's data — composition (companies, industries, countries
-   with percentages) and financial statements.
+1. **Extracts** available fund data from Yahoo Finance — top holdings, sector
+   weights, and fund-level overview metrics. Coverage varies by fund; the
+   implementation does not retrieve country weights or company financial
+   statements.
 2. **Searches** the web in parallel (Exa) for news relevant to what the fund
    holds.
 3. **Synthesizes** (Gemma 4 via Ollama) detailed, easy-to-understand company
    insights and sector insights (where each sector is heading) from relevant
-   news and market views. Fund snapshot and metric presentation are assembled
-   from extracted data without LLM interpretation.
+   news and market views. Metric presentation is assembled from extracted data
+   without LLM interpretation.
+4. **Answers questions** about a completed run: the report plus every source
+   collected in that run are reopened in a multi-turn Q&A session, with
+   answers cited to the same numbered saved sources, plus distinct web
+   citations when the saved sources are insufficient.
 
-The output informs decisions — it is not personalized financial advice, and it
-is never a dump of random news articles.
+When a report succeeds, the browser displays it alongside a chat initialized
+from that run. The user can also search and browse the news articles collected
+for that run.
+
+The report output informs decisions — it is not personalized financial advice,
+and it is never a dump of random news articles. Q&A starts with artifacts
+saved by the original run and performs a bounded web search only when those
+sources are insufficient.
 
 ## 3. Goals
 
-- One command produces a complete, readable fund report.
+- A user can start an analysis in the browser and get a complete, readable
+  fund report.
 - Every report uses simple language and explains financial terms so anyone can
   understand it.
 - Every claim traces to extracted fund data or a searched news item.
+- Every Q&A answer traces to a source collected in that run or a conditional
+  web-search result, or explicitly says the available sources do not cover it.
 - Coverage is proportional to the fund: largest holdings by weight drive the
   news searches.
 
 ## 4. User Journey
 
-1. User submits a fund name to the CLI.
-2. Invesk validates input and resolves the fund.
-3. Extracts fund information: composition + financial statements.
-4. Fans out parallel Exa searches over key holdings and industries.
+1. User enters a fund name in the browser and starts an analysis.
+2. Invesk validates the input and resolves the fund.
+3. Extracts available fund information: top holdings, sector weights, and
+   fund-level overview metrics.
+4. Fans out parallel Exa searches over key holdings and sectors.
 5. Gemma 4 writes detailed company and sector insights in clear language.
-6. User reads the Markdown report printed to stdout and saved under `output/`.
+6. User reads the report in the browser; the report and supporting artifacts
+   are saved under `output/`.
+7. User asks follow-up questions in the run-scoped browser chat. Invesk answers
+   from the run's collected sources first.
+    If they are insufficient, it can search the web, distinguish those
+    citations, and show source links with supporting excerpts.
 
 ## 5. Tech Stack & Environment
 
 | Concern | Choice |
 | --- | --- |
-| Backend language / runtime | Python 3.11+ (CLI) |
+| Backend language / runtime | Python 3.11+ (local web API, report/Q&A logic) |
+| Frontend | React + TypeScript + Vite; shadcn/ui-style components built on Radix UI |
+| Frontend toolchain | Node.js 18+ and npm |
 | Packaging | Python package (`pyproject.toml`), installed into a venv |
 | LLM | Gemma 4 (`gemma4:cloud`) served through Ollama |
 | Web search | Exa API |
 | Fund data | yfinance (Yahoo Finance) — pinned library, no API key |
-| Output | Markdown report (stdout + `output/`) + JSONL events |
+| Output | Browser report and chat; saved report/data/events under `output/` |
 
 Environment: virtual environment with pinned dependencies; outbound calls to
 Ollama Cloud, Exa, and Yahoo Finance (via yfinance). Supply the Exa API key via
@@ -63,97 +86,123 @@ an environment variable. Authenticate Ollama Cloud in the terminal with
 
 ## 6. Architecture
 
-One process, one data location (P1). Stages are stateless; all external clients
-and configuration are injected at a single composition root (P3). The CLI
-invokes the pipeline directly from that composition root (P2).
+The browser is the supported user interface. A local FastAPI service starts
+report runs in background workers, exposes progress and artifacts, and handles
+run-scoped Q&A. It binds to localhost by default. The React/Vite frontend uses
+that API in development and is served from `frontend/dist/` by the API when
+built. Report stages run in one process and write artifacts under `output/`;
+Q&A operates on a completed run and appends its own events without changing
+the report or saved research data.
 
 ```
-CLI input ──▶ composition root ──▶ pipeline stages
-(fund name)          │
-                     │
-         [1] Fund extraction ──────▶ yfinance (Yahoo)        → FundProfile
-                │
-                ▼
-        [2] Search orchestration ─▶ Exa (parallel, capped)  → NewsItem[]
-                │
-                ▼
-        [3] Synthesis ────────────▶ Gemma 4 / Ollama        → structured report sections
-                │
-                ▼
-        [4] Report assembly ────────────────────────────────→ markdown report + JSONL events
-                          │
-                          ▼
-               Markdown report → stdout + output/; supporting data/events → output/
+Browser ──▶ FastAPI ──▶ report pipeline ──▶ saved run artifacts
+                         │
+                         ├─ Fund extraction ─▶ Yahoo Finance
+                         ├─ News search ──────▶ Exa
+                         ├─ Synthesis ────────▶ Ollama / Gemma 4
+                         └─ Report assembly ──▶ report.md + JSONL events
 ```
 
-- One module per pipeline stage (§8); modules communicate through the §10
-  entities passed as explicit parameters — no globals, no import-time side
-  effects (P3).
-- Stages are plain function calls from the composition root; no interface or
-  plugin layers (P2).
-- Modules exchange data only across versioned external HTTP/file boundaries (P4).
-- Packaging: `pip install -e .`; reverting a change means restoring the
-  previous installed version (P7).
+Browser flow:
+
+```
+Browser: fund form ──▶ run report pipeline ──▶ successful run artifacts
+                                               │
+                       ┌───────────────────────┴──────────────────────┐
+                       ▼                                              ▼
+                Render report                              Initialize chat context
+                                                        (report + profile + news)
+                       │                                              │
+                       └──────── Search/browse saved news ────────────┘
+```
+
+- Pipeline stages are plain function calls from the composition root and pass
+  internal entities explicitly; external services and configuration are not
+  accessed through import-time side effects.
+- External provider APIs and persisted artifacts have documented contracts.
+  Internal stage data is passed in-process.
+- Packaging: `pip install -e .`.
+- Q&A reads a saved run directory and appends only its own events. It calls
+  Ollama for answers and conditionally calls Exa only when saved evidence is
+  insufficient. It never calls Yahoo or re-runs synthesis.
 
 ## 7. Components
 
 | Module | Responsibility |
 | --- | --- |
-| `cli` | Validate fund name; wire dependencies; orchestrate stages; set exit codes |
+| `src.core` | Shared configuration, events, models, and report-stage orchestration |
+| `src.fund_suggestions` | Yahoo-backed fund-name suggestions for the browser interface |
 | `models` | `FundProfile`, `NewsItem`, report-section entities with validation |
 | `extraction` | yfinance client and boundary adapter → `FundProfile` |
-| `search` | Build Exa queries from top holdings/sectors/countries; run parallel; dedupe and cap |
+| `search` | Build Exa queries from top holdings and sector weights; run parallel; dedupe and cap |
 | `synthesis` | Prompt building, Ollama client, structured-response parsing (one retry) |
 | `report` | Render sections into markdown; write artifacts |
+| `qa` | Load a completed run; retrieve run evidence; conditionally search the web; answer with validated citations and show supporting evidence |
 | `events` | Emit JSONL events for every stage |
+| `web` | Provide the local HTTP API for background report runs, progress, run artifacts, and multi-turn Q&A |
+| `frontend` | Collect a fund name, show pipeline progress and report, initialize run-scoped chat on success, and search/browse that run's saved news |
 
 ## 8. External Interface Contracts
 
-Request/response schemas for each boundary are versioned in `contracts/` and
-written **before** the consuming code (P4). Each contract records: endpoint,
-method, auth, request/response schemas, error codes, rate limits.
+The current external API and saved-artifact behavior is documented in
+`contracts/`. Those documents describe the implementation; their contract
+versions are independent of payload schema versions.
 
 | Boundary | Method / Endpoint | Auth | Notes |
 | --- | --- | --- | --- |
 | Ollama Cloud (Gemma 4) | `chat` (ollama Python client) | Ollama CLI session (`ollama signin`) | Insights-only structured JSON output; one retry on malformed output ([contract v1](../contracts/ollama.v1.md)) |
-| Exa | `/search` (REST) | `x-api-key` header | Parallel news queries |
+| Ollama Cloud (Gemma 4) — Q&A | `chat` (ollama Python client) | Ollama CLI session (`ollama signin`) | Analyst system prompt, answer + citation JSON over a saved run; one retry per model request ([contract v2](../contracts/qa.v1.md)) |
+| Exa | `Exa.search()` SDK | `x-api-key` header | Parallel report news queries; one conditional Q&A web search on insufficiency |
 | Yahoo Finance (yfinance) | Library call (ticker lookup + fund fields) | None | yfinance pinned in `pyproject.toml`; field mapping versioned in `contracts/` |
+| Local browser API | `/api/runs`, `/api/runs/{id}/questions`, `/api/runs/{id}/chat/reset` (HTTP) | None; bound to localhost | Browser-to-Python contract ([contract v3](../contracts/web.v1.md)) |
+
+The Q&A response contract fixes the answer, citation, and refusal schema so
+the session can validate model output. Conditional web results are transient:
+they do not change the saved artifact contracts or news corpus.
 
 ## 9. Data Model & Artifacts
 
-Each run writes versioned JSON artifacts plus the report to
+Each report run writes versioned JSON artifacts plus the report to
 `output/<fund-slug>/<run_id>/`: `report.md`, `fund_profile.json`, `news.json`,
 `events.jsonl`. Artifact schemas carry a `schema_version`; changes bump it
-(P4).
+when the payload shape changes. Q&A reads these artifacts and does not add to
+the required set; its conversation history is in memory only.
 
 Entities:
 
-- **FundProfile** — fund name, provider, holdings `[{name, weight}]`, sector
-  weights, and the fund's overview metrics (gaps flagged for anything Yahoo
-  does not return; per-holding data is not available from the provider and
-  is not part of the model).
+- **FundProfile** — fund name, provider, top holdings `[{name, weight}]`,
+  sector weights, and available fund-level overview metrics (gaps flagged for
+  anything Yahoo does not return; per-holding financial data is not available
+  and is not part of the model).
 - **NewsItem** — title, url, source, published date, summary, relevance,
-  related entities.
-- **Report** — fund, generated-at; sections: snapshot and fund-level metrics
-  assembled from `FundProfile`, plus company insights and sector insights
+  related entities, and the page text's first 10000 characters. Every
+  deduplicated search result is stored, whether or not the report cites it.
+- **Source tiers** — *collected*: every `NewsItem` in `news.json`; *supplied*:
+  the capped subset included in the FR4 prompt; *cited*: the subset the
+  report actually references. Q&A reads the collected tier.
+- **Report** — fund, generated-at; fund-level metrics assembled from
+  `FundProfile`, plus company insights and sector insights
   synthesized by the LLM. Report citations refer to stable source tokens for
   supplied `NewsItem.url` values; the renderer maps each token to its numbered
-  source entry.
+  source entry. Only cited sources appear in the report's Sources list, and
+  numbering follows the full deduplicated `NewsItem[]`, so that list can be
+  non-contiguous.
+- **QASession** — a completed run's report, fund profile, and collected news,
+  plus in-memory conversation turns. Each browser answer carries validated
+  saved-news and/or transient web citations with supporting excerpts.
 
 ## 10. Functional Requirements
 
-**FR1 — Input handling.** Input: fund name (string). It must not be empty.
-The application prompts for the fund name; while typing, it shows live fund
-name suggestions from Yahoo (best-effort; selection via Tab, submission via
-Enter with an explicit `[Y/n]` confirmation before the run starts). When
-stdin is not an interactive terminal, the app falls back to a plain prompt.
-Usage errors (empty input, cancelled confirmation) exit `2` before any
-external call. Fund names are accepted as free text.
+**FR1 — Browser input.** The user enters a fund name in the browser. After two
+characters, the app shows up to six best-effort Yahoo fund suggestions. When
+suggestions are available, the user selects one with the arrow keys and Enter
+or by clicking it; if no suggestions are available, free-text input is allowed.
+The API trims and validates the name (1–200 characters) before starting a run.
 
 **FR2 — Fund data extraction.** Fund name → Yahoo ticker lookup via yfinance →
 `FundProfile`; weights and provider formats normalized at the boundary adapter.
-Fund not found or provider failure → exit `1`; partial data → proceed and flag
-gaps in the report.
+Fund lookup or provider failures are shown as a run failure; partial data
+proceeds with its gaps flagged in the report.
 
 **FR3 — News search.** `FundProfile` + config caps (defaults, tunable: ≤ 10
 searches — one per top-5 holding by weight plus one per top-5 sector by
@@ -161,14 +210,14 @@ weight, the sector queries asking where the sector is heading — ≤ 5 results
 each, 90-day window) → deduplicated `NewsItem[]` (by URL), each carrying the
 result's summary and page text (first 10000 characters). Individual search
 failures
-are logged and skipped; total failure degrades to a fund-data-only report via
-config flag (P7) or aborts.
+are logged and skipped; total failure degrades to a fund-data-only report when
+configured, or aborts.
 
 **FR4 — LLM synthesis.** `FundProfile` + `NewsItem[]` → structured
 **company insights** (what the news says about the top holdings) and **sector
 insights** (where each sector is heading), validated against the insights
 schema. These are the only report sections the LLM writes; it does not write
-the fund snapshot or interpret financial metrics. Insights are grouped by
+the `Financial health` section or interpret financial metrics. Insights are grouped by
 company or sector, detailed and informative, and written in simple language
 for a general reader. They connect sourced developments to business or sector
 effects and explain why those effects could matter to an investor in the fund,
@@ -187,28 +236,111 @@ numbered source entries; unknown tokens and missing section citations are
 malformed. This validates citation references, not whether a source
 substantively supports each claim. At most the top few news items per entity
 are fed to the prompt, and the reply is bounded so it fits the model's output
-window. Malformed output → one corrective retry, then exit `1`.
+window. Malformed output → one corrective retry, then the run fails.
 
 **FR5 — Report generation.** Validated insights plus `FundProfile` → the report
-printed to stdout and written to `output/<fund-slug>/<run_id>/report.md` with
-the §10 artifact set. FR5 assembles the snapshot and presents available
-fund-level metrics directly from `FundProfile`; it does not infer a financial
-health assessment. Report metadata shows the fund name and currency, and a UTC
-timestamp formatted `DD-MM-YYYY HH:MM`. Inline citations use numbered
-markers (`[1]`, `[2]`, …) that map
-to the corresponding numbered entries in the report's Sources list. Numbering
-follows the deduplicated `NewsItem[]` order and is consistent between the
-markers and source entries within a run. Write failure → exit `1`.
+displayed in the browser and written to `output/<fund-slug>/<run_id>/report.md`
+with the §9 artifact set. FR5 presents available fund-level metrics directly
+from `FundProfile`; it does not infer a financial health assessment. Report
+metadata shows the fund name and currency, and a UTC timestamp formatted
+`DD-MM-YYYY HH:MM`. Inline citations use numbered
+markers (`[1]`, `[2]`, …) that map to the corresponding numbered entries in
+the report's Sources list. Only sources actually cited in the insight sections
+appear in that list; collected but uncited items stay in `news.json` and are
+not listed in the report. Numbering follows the deduplicated `NewsItem[]`
+order, so the Sources list can be non-contiguous (`2.`, `5.`, `9.`) and a
+number means the same item in the report, in `news.json`, and in Q&A. A write
+failure marks the run as failed.
 
-**FR6 — Events & exit codes.** Every stage boundary emits the §16 events (schema v2).
-Exit codes: `0` success, `1` runtime failure, `2` usage error.
+**FR6 — Events & run status.** Every stage boundary emits the §15 events
+(schema v2). The API exposes run progress and failure status to the browser;
+invalid request input returns HTTP `422`.
+
+**FR7 — Browser Q&A over a completed run.** The browser sends questions to
+the run-scoped Q&A API, which loads the completed run's `report.md`,
+`fund_profile.json`, and `news.json`. The corpus is every `NewsItem` in `news.json`,
+including items the report did not cite and items never supplied to the FR4
+prompt. Each turn first retrieves passages from that corpus and asks Gemma 4 to
+answer from them. If the model determines that the run's evidence is
+insufficient for a comprehensive answer, and `EXA_API_KEY` is configured, Q&A
+performs one general-web Exa search using the current question and recent
+follow-up questions only. It then asks Gemma 4 to answer using
+the retrieved run evidence plus the search results. A sufficient answer from
+the run corpus does not trigger web search. Search results are transient Q&A
+evidence: they do not modify `news.json`, the report, or the article browser.
+
+The analyst persona and response principles are sent in an Ollama `system`
+message. The report, fund profile context, retrieved evidence, conversation
+history, and current question are supplied in the following `user` message.
+The report is session context, not itself a citable source; its Sources list is
+not the full corpus and must not be treated as one. Results and citations are
+validated against the Q&A response schema in `contracts/qa.v1.md`.
+
+Citations use the run's existing numbering: `[n]` is the item's position in the
+deduplicated `NewsItem[]`, so report and Q&A numbers agree. Every cited number
+must refer to a collected `NewsItem` and to a passage supplied for that turn;
+the report's own `[n]` markers are not valid unless the corresponding article
+is supplied. Web citations use `[Wn]`, where `Wn` identifies a result returned
+for that turn; they cannot collide with saved-news numbering. The answer's
+citations array contains integers for saved-news sources and strings for web
+sources (for example `[2, "W1"]`). A substantive answer must contain at least
+one valid citation, and a refusal must contain none. The browser shows linked
+citations with supporting excerpts and source links. The model may use
+only supplied evidence; it does not answer from parametric knowledge, give
+buy/sell advice or price predictions, or treat report/profile claims as
+evidence. Follow-up questions use recent turns for local retrieval and the
+bounded web query. Q&A never calls Yahoo or re-runs synthesis. Saved article
+text is limited to its stored first 10000 characters; transient web text and
+evidence are bounded by the Q&A contract. Malformed output → one corrective
+retry per model request, then the turn fails without ending the session.
+Conversation history is in-memory for the session; persistence is an open
+question (§16).
+
+**FR8 — Web report, chat, and article search.** The React/TypeScript browser
+frontend uses shadcn/ui-style components and a local FastAPI API to expose the
+existing report-generation and Q&A behavior. As the user types at least two
+characters, the frontend shows up to six best-effort Yahoo fund-name
+suggestions, matching the fund-only filter. The up and down arrow
+keys navigate the selection; the user must choose a suggestion before analysis
+when matches are available. If no suggestions are available, analysis can use
+the typed name. The user can see live stage progress and failure state, and view
+the report when generation succeeds. A successful run automatically
+initializes its chat from that run's
+  `report.md`, `fund_profile.json`, and `news.json`; the user does not select a
+  run directory. The chat preserves
+FR7's multi-turn history, evidence retrieval, source numbering, citations,
+supporting passages, conditional web fallback, and refusal behavior.
+
+The user can search and browse the collected articles for the active run,
+including articles not cited in the report. Article search operates on the
+saved `news.json` corpus (title, source, date, summary, and stored article text)
+and does not make new Exa or Yahoo calls or modify the corpus. Chat retrieval
+remains over the full run corpus, independent of the article list's current
+search/filter state. Chat may use the FR7 web fallback after run evidence proves
+insufficient; those transient results do not enter the article list or saved
+corpus. A failed or incomplete report run does not start a chat.
+
+The chat window provides a **Reset Chat** action. Resetting clears the visible
+conversation and the server-side conversation history used for follow-up
+questions and web searches. It retains the analyst system instructions and the
+active run's report and fund profile context; the full saved news corpus remains
+available for retrieval. Reset does not delete run artifacts, alter the article
+browser, or start new research. The report and fund profile remain orientation
+context, not citable evidence, as specified by FR7.
+
+Run artifacts and progress are stored under `output/`; active run registration
+and chat history are in memory, so restarting the web server ends the session
+but does not remove completed artifacts. The API binds to `127.0.0.1` by
+default; deployment beyond a trusted local machine requires an authenticated
+and appropriately secured hosting configuration.
 
 ## 11. Non-Functional Requirements
 
 | Category | Requirement | Measurement |
 | --- | --- | --- |
 | Performance | Typical fund → report in ≤ 5 min wall clock | Timed runs on 3 sample funds |
-| Observability | Structured events at every stage boundary | Event presence in `events.jsonl` (P6) |
+| Q&A latency | Sufficient run evidence uses one Ollama call and local retrieval; only insufficient turns make one Exa search and a follow-up Ollama call | Timed turns on 3 saved runs |
+| Observability | Structured events at every stage boundary | Event presence in `events.jsonl` |
 | Security | No secrets in logs, reports, or the repository | Secret scan before each PR |
 
 ## 12. Security
@@ -219,66 +351,91 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error.
   requires no key.
 - Keys are never logged and never embedded in prompts or reports; traffic is
   HTTPS.
-- The structured event stream is the audit trail (P6).
+- Q&A treats report, article, web, and conversation text as untrusted input.
+  Retrieved passages are delimited as evidence, and the prompt instructs the
+  model to ignore instructions embedded in those sources.
+- Q&A sends only the current question and recent follow-up questions in its
+  conditional Exa query. It never sends the report, profile details,
+  saved articles, prompts, conversation answers, or credentials to Exa. Web
+  results are transient and are not written to run artifacts; event records
+  contain no query or result text.
+- Q&A reads the saved run directory and appends its own events. It calls Ollama
+  for answers and Exa only after the run's evidence is insufficient; it never
+  calls Yahoo or re-runs synthesis.
+- The structured event stream is the audit trail.
 
 ## 13. Testing Plan
 
-Testing follows P5: cover core transformations, not application plumbing.
+The default test suite covers core transformations and browser API behavior
+with provider calls replaced by local fakes.
 
-- **Core unit tests** — FR1 input validation; FR2 weight normalization and
+- **Core and API tests** — FR1 browser input validation and suggestions; FR2 weight normalization and
   profile mapping; FR3 query construction, news mapping, deduplication, and
   failure/degrade policy; FR4 prompt building, response/citation validation,
   and one-retry behavior; FR5 report rendering and versioned artifact
-  documents.
-- **Not in the default suite** — CLI orchestration, event emission, terminal
-  presentation, and filesystem writes. Two optional smoke tests call real Exa
-  and Ollama boundaries (`pytest -m smoke`); they are excluded from routine runs.
-- **Performance** — timed runs on the 3 sample funds; investigate anything
-  above the 10-minute budget.
+  documents; FR8 browser run lifecycle, progress, chat, and reset; FR7 artifact
+  loading and source numbering, passage retrieval,
+  citation validation (unknown news/web ID, uncited answer, cited refusal),
+  refusal path, report-is-not-evidence enforcement, follow-up query rewriting,
+  system/user message separation, and untrusted-source delimiting; conditional
+  web fallback (no search for sufficient local evidence; search and mixed
+  citations only after insufficiency).
+- **Not in the default suite** — live provider calls. Two optional smoke tests
+  call real Exa and Ollama boundaries (`pytest -m smoke`); they are excluded
+  from routine runs.
+- **Performance** — timed runs on the 3 sample funds; timed Q&A turns on 3
+  saved runs; investigate anything above the 10-minute report budget.
 - **Security** — secret scanning; artifacts contain no keys.
 
 ## 14. Running the Project
 
-Commands (P10) are documented in the README:
+The browser app is the user workflow. For local development, commands are
+documented in the README:
 
 | Command | Purpose |
 | --- | --- |
 | `pip install -e .` | Install into a virtual environment |
-| `python -m src` | Ask for a fund name, then generate a report (print and write artifacts) |
+| `python -m src.web` | Start the local browser API |
+| `npm install` | Install browser frontend dependencies from the project root |
+| `npm run dev` | Start the browser frontend |
+| `npm run build` | Build static assets served by the local API |
 | `pytest` | Core-logic transformation tests (offline) |
 
-Rollback (P7): restore the previous installed version. Degrade mode and
-search caps are configuration, not code.
+Search caps and the total-failure degrade behavior are configuration.
 
 ## 15. Observability
 
 - **Events**: `run_started`, `stage_completed`, `external_call` (provider,
   latency, status), `token_usage`, `report_written`, `run_failed` (stage,
   error code).
-- **Fields**: `run_id`, fund, stage, timestamp; request ids on
-  external calls.
-- Events and exit codes are the only signals, from one instrumentation source
-  (P6). Any future alerting follows P8.
+- **Q&A events**: `qa_started`, `qa_answered` (citations, evidence counts,
+  latency), `qa_failed`; appended to the run's `events.jsonl`. Names and fields
+  are documented in the events contract.
+- **Fields**: `run_id`, stage, timestamp on every event; `fund` on
+  `run_started`; request IDs on external calls when the provider supplies one.
+- Events and run status are the instrumentation signals. Any future alerting
+  can build on the event stream.
 
 ## 16. Open Questions
 
-1. **Yahoo coverage** — does yfinance expose full holdings (companies,
-   industries, and country weights) for funds like Vanguard FTSE 250, or only
-   sector weightings and top holdings? (Blocks FR2.)
-2. **Holdings-derived statements** — per-holding data is not available from
-   Yahoo; the report presents fund-level overview metrics only and does not
-   assess the individual companies held by the fund (resolved 2026-11-13).
-3. **yfinance fragility** — Yahoo rate limits and scraping fragility; fallback
+1. **yfinance fragility** — Yahoo rate limits and scraping fragility; fallback
    fund-data source if it breaks.
-4. **Gemma 4 variant/size** and Ollama Cloud availability/auth; behavior on provider failure.
-5. **Rate limits & cost budget** per run for Exa and Ollama Cloud.
-6. **Search defaults** — confirm FR3 caps after first real runs.
+2. **Provider operations** — Ollama Cloud and Exa availability, rate limits,
+   and a per-run cost budget.
+3. **Q&A transcript persistence** — history is currently in memory only; decide
+   whether a future release should persist it as a run artifact.
+4. **Q&A quality** — evaluate retrieval recall, answer correctness, citation
+   support, and refusal accuracy on a representative set of saved runs. The
+   current retriever is lexical BM25 with title matching.
+5. **Claim support checks** — source excerpts are shown to users; consider
+   whether automated entailment checks add value.
 
 ## 17. Definition of Done
 
-Per P9, a work item is done when it is:
+A work item is done when it is:
 
-1. **Running** — a user can run one command and get the report.
+1. **Running** — a user can start an analysis in the browser, get the report,
+   and ask follow-up questions in the run-scoped chat.
 2. **Instrumented** — its effect is visible in `events.jsonl`.
 3. **Verified** — relevant core transformation tests pass locally.
-4. **Revertible** — the previous version reinstalls cleanly.
+4. **Revertible** — the previous version can be restored cleanly.
