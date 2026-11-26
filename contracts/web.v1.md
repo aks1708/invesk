@@ -139,8 +139,10 @@ Successful response:
 
 When neither saved nor web evidence covers a question (or web search is
 unavailable), `citations` and `evidence` are empty and `insufficient` is true.
-Saved-news citations remain integer source numbers; transient web citations are
-`Wn` strings and are never added to the saved articles. The API appends the
+A general-concept explanation may also have empty `citations` and `evidence`
+with `insufficient` false, without a special preface. Saved-news citations remain
+integer source numbers; transient web citations are `Wn` strings and are never
+added to the saved articles. The API appends the
 existing Q&A events to that run's
 `events.jsonl`. Questions for a run that is not yet complete return HTTP `409`;
 invalid question input returns `422`; invalid model output after its corrective
@@ -159,8 +161,9 @@ No request body is required. A successful reset returns HTTP `200`:
 
 The endpoint clears the in-memory conversation history used by subsequent
 questions and web-search follow-ups. The analyst system instructions and
-run-scoped report/profile context continue to be supplied for every question;
-retrieval continues to use the complete saved news corpus. It does not remove
+run-scoped fund profile context continue to be supplied for every question;
+the displayed report is not sent to the model. Retrieval continues to use the
+complete saved news corpus. It does not remove
 the run's Q&A event records. Unknown run IDs return HTTP `404`; runs whose
 reports are not complete return HTTP `409`.
 
@@ -174,8 +177,9 @@ Q&A reads the complete collected `news.json` corpus and uses the Ollama chat
 boundary. Only when Ollama determines that this evidence is insufficient does
 it make one Exa web search, if configured. Article search/browsing remains
 local and never uses Exa. Web results are transient and are not persisted.
-Saved article content is bounded by the stored first 10000 characters per item
-as specified by the artifact and Q&A contracts.
+Saved article content is stored full-length (no 10000-char cap at ingest per FR3
+search options with max_characters=None); per-article content is available in
+its entirety for Q&A and article browser.
 
 ## Frontend hosting
 

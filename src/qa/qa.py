@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from collections.abc import Callable, Iterable
 from typing import Any, Final, Protocol
@@ -9,19 +11,20 @@ from typing import Any, Final, Protocol
 from src.core.events import EventEmitter
 from src.qa.corpus import QARun
 from src.qa.errors import QAError, QAResponseError
+from src.qa.ranking import retrieve_ranked
 from src.qa.prompt import (
     corrective_prompt,
     build_qa_prompt,
     request_messages,
     request_options,
 )
+from src.qa.query_rewrite import rewrite_followup
 from src.qa.response import QAResponse, parse_qa_response, reply_text, usage_tokens
 from src.qa.retrieve import (
     QA_EVIDENCE_MAX_CHARS,
     QA_HISTORY_TURNS,
     QA_MAX_PASSAGES,
     Passage,
-    retrieve,
 )
 from src.synthesis.synthesis import OLLAMA_TIMEOUT_SECONDS, _provider_error_fields
 from src.search.queries import exa_error_details
@@ -35,7 +38,9 @@ MAX_ATTEMPTS: Final[int] = 2
 
 
 class OllamaClient(Protocol):
-    def chat(self, *, model: str, messages: Any, options: Any) -> Any: ...
+    def chat(
+        self, *, model: str, messages: Any, options: Any, stream: bool = False
+    ) -> Any: ...
 
 
 def ollama_client() -> OllamaClient:
@@ -55,16 +60,33 @@ def _ask_turn(
     exa_api_key: str | None = None,
     exa_factory: Callable[[str], ExaClient] = exa_client,
     status_callback: Callable[[str], None] | None = None,
+    token_callback: Callable[[str | None], None] | None = None,
 ) -> tuple[str, tuple[int | str, ...], bool, list[Passage], int, int, bool]:
     turn_started = time.monotonic()
     if status_callback is not None:
         status_callback("thinking")
-    history_questions = [old_question for old_question, _ in history[-QA_HISTORY_TURNS:]]
-    local_passages = retrieve(
-        question, run.news, history_questions=history_questions
+    recent_history = history[-QA_HISTORY_TURNS:]
+    rewritten_question = rewrite_followup(
+        question,
+        recent_history,
+        fund_name=str(run.profile.get("name", "Unknown")),
+        ticker=str(run.profile.get("ticker", "Unknown")),
+        client=client,
+        model=QA_MODEL,
+        options=request_options(),
+        events=events,
+    )
+    local_passages = retrieve_ranked(
+        rewritten_question.search_query,
+        run.news,
+        events=events,
     )
     prompt = build_qa_prompt(
-        run, question, local_passages, history[-QA_HISTORY_TURNS:]
+        run,
+        question,
+        local_passages,
+        recent_history,
+        standalone_question=rewritten_question.standalone_question,
     )
     parsed, attempts = _ask_model(
         run,
@@ -72,18 +94,22 @@ def _ask_turn(
         local_passages,
         client,
         events,
+        token_callback=token_callback,
     )
     final_passages = local_passages
     web_search_attempted = False
 
-    # A validated insufficiency response is the sole gate for the web fallback.
+    # Let the evidence-quality assessment, not the phrasing of the question,
+    # decide whether the saved corpus needs web evidence.
     if parsed.insufficient and exa_api_key:
+        if token_callback is not None:
+            token_callback(None)
         web_search_attempted = True
         if status_callback is not None:
             status_callback("searching_web")
         # Keep broad questions broad: appending the fund name/ticker can skew
         # web search away from a topic the user is asking about generally.
-        standalone_query = " ".join([*history_questions, question]).strip()[:1000]
+        standalone_query = rewritten_question.search_query[:1000]
         search_started = time.monotonic()
         try:
             exa = exa_factory(exa_api_key)
@@ -129,7 +155,11 @@ def _ask_turn(
             )
             final_passages = [*web_for_fallback, *local_for_fallback]
             web_prompt = build_qa_prompt(
-                run, question, final_passages, history[-QA_HISTORY_TURNS:]
+                run,
+                question,
+                final_passages,
+                recent_history,
+                standalone_question=rewritten_question.standalone_question,
             )
             parsed, fallback_attempts = _ask_model(
                 run,
@@ -137,6 +167,7 @@ def _ask_turn(
                 final_passages,
                 client,
                 events,
+                token_callback=token_callback,
             )
             attempts += fallback_attempts
 
@@ -175,6 +206,8 @@ def _ask_model(
     passages: list[Passage],
     client: OllamaClient,
     events: EventEmitter,
+    *,
+    token_callback: Callable[[str | None], None] | None = None,
 ) -> tuple[QAResponse, int]:
     messages = request_messages(prompt)
     attempts = 0
@@ -182,9 +215,38 @@ def _ask_model(
         attempts += 1
         started = time.monotonic()
         try:
-            response = client.chat(
-                model=QA_MODEL, messages=messages, options=request_options()
-            )
+            if token_callback is None:
+                response = client.chat(
+                    model=QA_MODEL, messages=messages, options=request_options()
+                )
+                text = reply_text(response)
+            else:
+                response_stream = client.chat(
+                    model=QA_MODEL,
+                    messages=messages,
+                    options=request_options(),
+                    stream=True,
+                )
+                response = None
+                response_parts: list[str] = []
+                answer_stream = _JSONAnswerStream()
+                for chunk in response_stream:
+                    response = chunk
+                    try:
+                        content = getattr(
+                            getattr(chunk, "message", None), "content", None
+                        )
+                    except Exception:
+                        content = None
+                    # A whitespace-only model chunk is meaningful; reply_text
+                    # intentionally strips those for complete, non-streamed replies.
+                    if not isinstance(content, str) or not content:
+                        continue
+                    response_parts.append(content)
+                    delta = answer_stream.feed(content)
+                    if delta is not None:
+                        token_callback(delta)
+                text = "".join(response_parts)
         except Exception as exc:
             events.emit(
                 "external_call",
@@ -212,7 +274,6 @@ def _ask_model(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
-        text = reply_text(response)
         try:
             if text is None:
                 raise QAResponseError("reply contained no text")
@@ -230,4 +291,51 @@ def _ask_model(
         except QAResponseError as exc:
             if attempts >= MAX_ATTEMPTS:
                 raise
+            if token_callback is not None:
+                token_callback(None)
             messages = request_messages(corrective_prompt(prompt, str(exc), text))
+
+
+class _JSONAnswerStream:
+    """Extract decoded answer text from a JSON response as model chunks arrive."""
+
+    def __init__(self) -> None:
+        self.raw = ""
+        self.emitted = ""
+        self.answer_start: int | None = None
+
+    def feed(self, chunk: str) -> str | None:
+        self.raw += chunk
+        if self.answer_start is None:
+            match = re.search(r'"answer"\s*:\s*"', self.raw)
+            if match is None:
+                return None
+            self.answer_start = match.end()
+
+        fragment = self.raw[self.answer_start :]
+        index = 0
+        while index < len(fragment):
+            char = fragment[index]
+            if char == '"':
+                break
+            if char == "\\":
+                if index + 1 >= len(fragment):
+                    break
+                if fragment[index + 1] == "u" and index + 6 > len(fragment):
+                    break
+                index += 6 if fragment[index + 1] == "u" else 2
+                continue
+            index += 1
+
+        try:
+            decoded = json.loads('"' + fragment[:index] + '"')
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(decoded, str):
+            return None
+        if not decoded.startswith(self.emitted):
+            self.emitted = decoded
+            return None
+        delta = decoded[len(self.emitted) :]
+        self.emitted = decoded
+        return delta or None

@@ -1,5 +1,7 @@
 """Focused tests split from test_search.py."""
 
+import pytest
+
 from _search_support import (
     Holding,
     SearchQuery,
@@ -11,7 +13,7 @@ from _search_support import (
     news_from_result,
     raw_result,
 )
-import pytest
+from src.search.queries import search_options
 
 # --- build_queries (fan-out) --------------------------------------------------
 
@@ -119,13 +121,36 @@ def test_news_from_result_maps_the_full_result():
 
 
 def test_news_from_result_keeps_the_text_as_exa_returns_it():
-    # The 10000-character cap is Exa's concern (contents.text.maxCharacters);
-    # the boundary adapter never truncates client-side.
+    # Invesk now requests full article text from Exa (max_characters=None),
+    # so the boundary adapter passes through whatever text Exa returns
+    # without client-side truncation.
     item = news_from_result(
-        raw_result(text="A" * 5000 + "tail"), entity="E", rank=1
+        raw_result(text="A" * 12000 + "tail"), entity="E", rank=1
     )
     assert item.content is not None
-    assert len(item.content) == 5004
+    assert len(item.content) == 12004
+
+
+def test_search_options_request_full_compact_markdown_article_text():
+    assert search_options(
+        num_results=5,
+        start="2026-08-14T12:00:00.000Z",
+        end="2026-11-12T12:00:00.000Z",
+    ) == {
+        "num_results": 5,
+        "type": "auto",
+        "category": "news",
+        "start_published_date": "2026-08-14T12:00:00.000Z",
+        "end_published_date": "2026-11-12T12:00:00.000Z",
+        "contents": {
+            "summary": {"query": "Key facts, figures, and dates"},
+            "text": {
+                "max_characters": None,
+                "verbosity": "compact",
+                "include_html_tags": False,
+            },
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -170,3 +195,13 @@ def test_dedupe_keeps_the_first_item_per_url():
     later = news(summary="Different query found it too", relevance=3)
     third = news(url="https://www.ft.com/content/abc", source="www.ft.com")
     assert dedupe_news([first, later, third]) == [first, third]
+
+
+def test_url_dedupe_merges_entities_from_later_searches():
+    first = news(related=("Company",))
+    later = news(related=("Sector",))
+
+    result = dedupe_news([first, later])
+
+    assert len(result) == 1
+    assert result[0].related == ("Company", "Sector")

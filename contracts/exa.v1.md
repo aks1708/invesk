@@ -5,8 +5,8 @@ stages — synthesis (FR4) — via the `NewsItem` entity. Boundary: the `exa-py`
 SDK (2.28.0, pinned in `pyproject.toml`) calling `Exa.search()`, which wraps
 REST `POST https://api.exa.ai/search` (Exa Public API spec 2.0.0, verified
 against https://exa.ai/docs/exa-spec.yaml on 2026-11-12; swapped from stdlib
-`urllib` to the SDK on 2026-11-12 — the wire request and the `NewsItem`
-schema are unchanged, so the schema version stays 1).
+`urllib` to the SDK on 2026-11-12. The Exa contract version is independent of
+the `NewsItem` artifact schema version (currently 2).
 
 ## Auth
 
@@ -28,11 +28,11 @@ One SDK call per query — `exa.search(query, **options)`:
 | `category` | `"news"` | Focus news; supports the published-date window (only `company`/`people` do not) |
 | `start_published_date` | ISO 8601 date-time | `now - window_days`, e.g. `2026-08-14T12:00:00.000Z` → wire `startPublishedDate` |
 | `end_published_date` | ISO 8601 date-time | `now` → wire `endPublishedDate` |
-| `contents` | `{"summary": {"query": "Key facts, figures, and dates"}, "text": {"maxCharacters": 10000}}` | Request both the per-result summary (query-biased) and the page text (first 10000 characters) for the FR4 digest |
+| `contents` | `{"summary": {"query": "Key facts, figures, and dates"}, "text": {"maxCharacters": null, "verbosity": "compact", "includeHtmlTags": false}}` | Request both the per-result summary (query-biased) and the page text (full article, markdown-style, no HTML tags; verbosity=compact excludes navigation/footers) for the FR4 digest |
 
-The SDK converts the snake_case options into the same camelCase wire body as
-v1 — the wire request is unchanged. The client is constructed with
-`timeout=30.0` (the previous `urllib` read timeout).
+The SDK converts the snake_case options to the camelCase wire fields shown
+above. The client is constructed with `timeout=30.0` (the previous `urllib`
+read timeout).
 
 ## Response 200
 
@@ -43,7 +43,7 @@ The SDK returns a `SearchResponse` whose `results` are `Result` objects:
 | `result.title`, `result.url` | News items (adapter table below) |
 | `result.published_date` | ISO 8601, may be `None` |
 | `result.summary` | Present when requested (FR4 digest) |
-| `result.text` | Present when requested — the page text, first 10000 characters (`TEXT_MAX_CHARS`); FR4 digest |
+| `result.text` | Present when requested — the page text (full article, markdown-style, no HTML tags; verbosity=compact, maxCharacters=null per search options); FR4 digest |
 | `result.author`, `result.id`, `result.score` | Unused in v1 |
 
 `requestId`: the SDK does **not** surface it on a 200 response, so successful
@@ -107,17 +107,18 @@ with a configuration error recorded in its event stream.
 | `result.url` hostname | `source` (publication), e.g. `reuters.com` |
 | `result.published_date` | `published` (ISO 8601 string, passed through; `None` when absent) |
 | `result.summary` | `summary` (`None` when absent) |
-| `result.text` | `content` (`None` when absent; first 10000 characters) |
+| `result.text` | `content` (`None` when absent or blank; full Markdown text stored as returned, without truncation or formatting changes) |
 | position in `results` | `relevance` — 1-based rank within its originating query (spec 2.0.0 returns no per-result score) |
-| — | `related` — the holding/sector label the query targeted (exactly one in v1) |
+| — | `related` — the single holding/sector label targeted by this query; URL deduplication may merge labels from multiple queries |
 
-Deduplication across queries: by exact trimmed URL, first-seen wins (query
-importance order, then rank). Counted drops are not errors.
+Deduplication across queries: by exact trimmed URL, first-seen article fields
+win (query importance order, then rank); `related` unions the targeted entities
+from every matching result. Counted drops are not errors.
 
 ## NewsItem entity (schema_version 2)
 
 Schema 2 note (changed from 1): `content` is added — the result's page
-text, requested (first 10000 characters) alongside the summary.
+text, requested (full article, markdown-style, no HTML tags) alongside the summary.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -126,7 +127,7 @@ text, requested (first 10000 characters) alongside the summary.
 | `source` | string | Publication hostname |
 | `published` | string \| null | ISO 8601 date-time from Exa |
 | `summary` | string \| null | Exa-generated summary |
-| `content` | string \| null | The result's page text, first 10000 characters |
+| `content` | string \| null | The result's page text (full article, markdown-style, no HTML tags) |
 | `relevance` | int | 1-based rank within its query |
 | `related` | `[string]` | Entities the query targeted |
 

@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -13,10 +13,6 @@ _STATUS_RE: Final[re.Pattern[str]] = re.compile(r"status(?: code)? (\d+)")
 _REQUEST_ID_RE: Final[re.Pattern[str]] = re.compile(r'"requestId"\s*:\s*"([^"]+)"')
 
 SUMMARY_QUERY: Final[str] = "Key facts, figures, and dates"
-#: FR3 content budget: request at most the first 10000 characters of each
-#: result's page text (`contents.text.maxCharacters` — the cap lives on
-#: `result.text`, not the generated summary).
-TEXT_MAX_CHARS: Final[int] = 10000
 #: FR3 focus: the top 5 companies and the top 5 sectors, each one query
 #: (max 10 searches per fund at the default cap).
 MAX_HOLDING_QUERIES: Final[int] = 5
@@ -57,18 +53,21 @@ def build_queries(profile: FundProfile, *, max_searches: int) -> tuple[SearchQue
     """
     budget = max(0, max_searches)
     queries: list[SearchQuery] = []
-    entities: set[str] = set()
+    query_texts: set[str] = set()
     for holding in sorted(
         profile.holdings, key=lambda h: h.weight, reverse=True
     )[:MAX_HOLDING_QUERIES]:
         if len(queries) >= budget:
             break
-        if not holding.name.strip() or holding.name in entities:
+        if not holding.name.strip():
             continue
-        entities.add(holding.name)
+        text = f"{holding.name} company news"
+        if text in query_texts:
+            continue
+        query_texts.add(text)
         queries.append(
             SearchQuery(
-                text=f"{holding.name} company news",
+                text=text,
                 entity=holding.name,
                 kind="holding",
             )
@@ -78,11 +77,12 @@ def build_queries(profile: FundProfile, *, max_searches: int) -> tuple[SearchQue
     )[:MAX_SECTOR_QUERIES]:
         if len(queries) >= budget:
             break
-        if sector in entities:
+        text = f"{sector} sector outlook"
+        if text in query_texts:
             continue
-        entities.add(sector)
+        query_texts.add(text)
         queries.append(
-            SearchQuery(text=f"{sector} sector outlook", entity=sector, kind="sector")
+            SearchQuery(text=text, entity=sector, kind="sector")
         )
     return tuple(queries)
 
@@ -93,10 +93,8 @@ def search_options(*, num_results: int, start: str, end: str) -> dict[str, Any]:
     exa-py maps these to the same wire fields as v1 — numResults,
     startPublishedDate, endPublishedDate — keeping the news category and the
     window, and requesting both the per-result summary (query-biased) and
-    the page text capped at 10000 characters (`contents.text.maxCharacters`
-    — the character limit belongs to `result.text`, not the generated
-    summary) for the FR4 digest. The query text itself is the SDK call's
-    first argument, not an option.
+    the full page text in compact, markdown-style form without HTML tags.
+    The query text itself is the SDK call's first argument, not an option.
     """
     return {
         "num_results": num_results,
@@ -106,7 +104,11 @@ def search_options(*, num_results: int, start: str, end: str) -> dict[str, Any]:
         "end_published_date": end,
         "contents": {
             "summary": {"query": SUMMARY_QUERY},
-            "text": {"max_characters": TEXT_MAX_CHARS},
+            "text": {
+                "max_characters": None,
+                "verbosity": "compact",
+                "include_html_tags": False,
+            },
         },
     }
 
@@ -125,12 +127,22 @@ def news_from_result(result: Any, *, entity: str, rank: int) -> NewsItem | None:
     """
     title = str(getattr(result, "title", None) or "").strip()
     url = str(getattr(result, "url", None) or "").strip()
-    if not title or not url.startswith(("http://", "https://")):
+    try:
+        parsed_url = urlsplit(url)
+        hostname = parsed_url.hostname
+    except ValueError:
+        return None
+    if (
+        not title
+        or parsed_url.scheme.lower() not in ("http", "https")
+        or not parsed_url.netloc
+        or not hostname
+    ):
         return None
     return NewsItem(
         title=title,
         url=url,
-        source=urlsplit(url).hostname or "",
+        source=hostname,
         published=_string_or_none(getattr(result, "published_date", None)),
         summary=_string_or_none(getattr(result, "summary", None)),
         content=_string_or_none(getattr(result, "text", None)),
@@ -140,13 +152,18 @@ def news_from_result(result: Any, *, entity: str, rank: int) -> NewsItem | None:
 
 
 def dedupe_news(items: Sequence[NewsItem]) -> list[NewsItem]:
-    """Drop later items whose URL was already seen (FR3 dedupes by URL)."""
-    seen: set[str] = set()
+    """Drop later URLs while retaining every targeted entity on the first item."""
+    positions: dict[str, int] = {}
     unique: list[NewsItem] = []
     for item in items:
-        if item.url in seen:
+        position = positions.get(item.url)
+        if position is not None:
+            first = unique[position]
+            unique[position] = replace(
+                first, related=tuple(dict.fromkeys((*first.related, *item.related)))
+            )
             continue
-        seen.add(item.url)
+        positions[item.url] = len(unique)
         unique.append(item)
     return unique
 
@@ -169,4 +186,3 @@ def exa_error_details(exc: BaseException) -> tuple[int | None, str | None]:
     if match:
         request_id = match.group(1)
     return status, request_id
-

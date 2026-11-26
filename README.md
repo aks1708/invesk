@@ -31,8 +31,8 @@ insights. Invesk does not predict share prices.
 
 ## Get started
 
-You’ll need **Python 3.11 or newer**, **Node.js 18 or newer** to build and run
-the browser frontend in development, an [**Exa API key**](https://exa.ai/),
+You’ll need **Python 3.11 or newer**, **Node.js 18 or newer** to build the
+browser frontend, an [**Exa API key**](https://exa.ai/),
 and the [**Ollama CLI**](https://ollama.com/download) to sign in to Ollama
 Cloud. Invesk itself is used through the browser.
 
@@ -55,10 +55,12 @@ Then sign in to Ollama Cloud in your terminal:
 ollama signin
 ```
 
-No Yahoo Finance key or local model download is required. Invesk uses Yahoo
-Finance for fund data, Exa for report news search and optional Q&A web search,
-and Ollama Cloud's `gemma4:cloud` model for insights and answers. Completed
-reports and their supporting artifacts are saved under `output/`.
+No Yahoo Finance key is required. Semantic news deduplication uses the local
+Ollama embedding model `embeddinggemma-2` by default; pull it once with
+`ollama pull embeddinggemma-2` and keep the local Ollama server running.
+Synthesis and Q&A use Ollama Cloud's `gemma4:cloud` model. Exa handles report
+news search and optional Q&A web search. Completed reports and their supporting
+artifacts are saved under `output/`.
 
 ## Run Invesk in your browser
 
@@ -76,24 +78,36 @@ Install the frontend dependencies from the project root:
 npm install
 ```
 
-For local development, start the API and frontend in separate terminals from
-the project directory:
+Build the browser frontend from the project root:
 
 ```bash
-INVESK_WEB_PORT=8001 .venv/bin/python -m src.web
+npm run build
+```
+
+Then start Invesk:
+
+```bash
+.venv/bin/python -m src.web
+```
+
+Open <http://127.0.0.1:8001>. The API serves the built frontend from
+`frontend/dist/`. Report generation requires `EXA_API_KEY` and an Ollama Cloud
+sign-in. Chat requires Ollama sign-in; `EXA_API_KEY` enables its optional web
+fallback. Set `INVESK_WEB_PORT` to use a different API port.
+
+For frontend development with Vite's hot reload, start the API and frontend in
+separate terminals instead, then open <http://127.0.0.1:5173>:
+
+```bash
+.venv/bin/python -m src.web
 ```
 
 ```bash
 VITE_API_TARGET=http://127.0.0.1:8001 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. The API is available on localhost port 8001
-by default; set `INVESK_WEB_PORT` and `VITE_API_TARGET` together to use a
-different port. Report generation requires `EXA_API_KEY` and an Ollama Cloud
-sign-in. Chat requires Ollama sign-in; `EXA_API_KEY` enables its optional web
-fallback. To build the browser app, run `npm run build` from the project root.
-Then start `.venv/bin/python -m src.web` and open <http://127.0.0.1:8001>;
-the API serves the built frontend from `frontend/dist/`.
+If you change the API port, set `INVESK_WEB_PORT` and `VITE_API_TARGET` to the
+same port.
 
 ## Configure news search (optional)
 
@@ -112,6 +126,23 @@ environment values take precedence over `.env`.
 
 For example, to change the lookback window, add `EXA_WINDOW_DAYS=30` to `.env`.
 Keep your API key private; `.env` is excluded from version control.
+
+News is also deduplicated semantically using a local Ollama embedding model
+before synthesis and artifact writing. The default is `embeddinggemma-2`; pull
+it once with `ollama pull embeddinggemma-2`. If embedding is unavailable, the
+run continues with URL-deduplicated news.
+
+| Variable | Default | What it controls |
+| --- | ---: | --- |
+| `DEDUPE_EMBED_MODEL` | `embeddinggemma-2` | Local Ollama embedding model |
+| `DEDUPE_SIMILARITY_THRESHOLD` | `0.9` | Cosine similarity at which two stories are duplicates (0–1) |
+| `DEDUPE_MAX_CHARS` | `4000` | Maximum article-text prefix included in each embedding |
+
+## Run-scoped Q&A retrieval
+
+Q&A searches the saved Markdown article text directly with deterministic local
+BM25/title matching. The model receives exact passages from the saved run
+artifacts; the stored Markdown is not rewritten or chunked for persistence.
 
 ## Run tests
 
@@ -133,11 +164,12 @@ and an Ollama Cloud sign-in:
 
 The external boundaries and saved run formats are documented in the contracts
 below. A contract document's version is separate from payload schema versions;
-for example, the Q&A contract is v2, the browser API contract is v3, and the
-event contract is v2.
+for example, the Q&A and events contracts are v3, the browser API contract is
+v3, and the event payload schema remains v2.
 
 - [Yahoo Finance fund data](contracts/yahoo.v1.md)
 - [Exa news search](contracts/exa.v1.md)
+- [Ollama embeddings for semantic deduplication](contracts/ollama_embed.v1.md)
 - [Ollama / Gemma synthesis](contracts/ollama.v1.md)
 - [Q&A over a saved run](contracts/qa.v1.md)
 - [Local browser API](contracts/web.v1.md)

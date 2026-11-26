@@ -10,10 +10,10 @@ no REST code and no API key (PRD §9).
 | Step | Call | Notes |
 | --- | --- | --- |
 | 1 | `yfinance.Search(fund, max_results=5).quotes` | List of quote dicts. Empty list ⇒ not found. |
-| 2 | Filter | First quote whose `quoteType` is `ETF` or `MUTUALFUND` **and** that has a non-empty `symbol`. Other quote types (EQUITY, INDEX, …) are skipped so a company share can never masquerade as the named fund. |
+| 2 | Filter | First quote whose `quoteType` is `ETF` or `MUTUALFUND` **and** that has a non-empty `symbol`. Other quote types are skipped. Exception: when the requested name explicitly says ETF, a matching `EQUITY` quote may be tried only as a fallback after `funds_data` reports `No Fund data found`; its `Ticker.info.quoteType` must verify as `ETF` before use. |
 | 3 | No match | `FundNotFoundError` → `run_failed` `fund_not_found`. |
 
-Quote fields used: `symbol`, `longname`, `quoteType`.
+Quote fields used: `symbol`, `longname`, `quoteType`; the guarded fallback also checks matching name tokens and `Ticker.info.quoteType`.
 
 ## Fetch: ticker → fund data
 
@@ -25,8 +25,11 @@ Quote fields used: `symbol`, `longname`, `quoteType`.
 | `…funds_data.fund_operations` | DataFrame indexed by attribute (`Annual Report Expense Ratio`, `Annual Holdings Turnover`, `Total Net Assets`), one column per symbol plus a category average | `overview` fallbacks: `expenseRatio`, `annualHoldingsTurnover` (never overrides `info`; `Total Net Assets` is never read — its units are unverifiable) |
 | `…funds_data.fund_overview` | Dict of `categoryName`, `family`, `legalType` | `overview.category`; `family` fallback when `info.fundFamily` is absent (it is, for most funds) |
 
-Any exception from these calls (HTTPError, timeout, parse failure) becomes
-`ExtractionError` → `run_failed` `yahoo_unavailable`.
+If Yahoo search returns a stale mutual-fund share class with no fund data,
+the adapter can retry a matching ETF result that Yahoo mislabeled `EQUITY`;
+the quote's `info.quoteType` must confirm it is an ETF. Other exceptions from
+these calls (HTTPError, timeout, parse failure) become `ExtractionError` →
+`run_failed` `yahoo_unavailable`.
 
 ## Boundary adapter normalization (Yahoo formats → FundProfile)
 
@@ -56,9 +59,11 @@ billion, 3-year beta 0.97) is the FR4/FR5 presentation concern
 Yahoo populates the performance fields unevenly per fund — missing
 fields are omitted, never defaulted (see the normalization table).
 
-## FundProfile entity (schema_version 2)
+## FundProfile entity
 
-Schema 2 note (changed from 1, 2026-11-13): `overview` is extended with
+The serialized `fund_profile.json` artifact uses schema version 3 (see
+[`artifacts.v1.md`](./artifacts.v1.md)). The current `FundProfile` includes
+`overview` performance fields:
 the fund-performance metrics — `trailingThreeMonthReturns`,
 `annualHoldingsTurnover`, `dividendRate`, `dividendYield`, `beta3Year`,
 `morningStarOverallRating`, `morningStarRiskRating`, `inception`, and
@@ -78,8 +83,8 @@ new fields are optional; only what Yahoo returned appears.
 | `overview` | `{field: number\|string}` | Curated metrics that Yahoo returned; ratio fields are percent values, `beta3Year`/Morningstar ratings unitless, amounts raw, `inception` an ISO date, `category` a readable label |
 | `gaps` | `[string]` | Human-readable, safe to print in the report |
 
-Serialization to `fund_profile.json` is an FR5 artifact concern and will be
-documented there; FR2 passes the entity in-process only.
+Serialization to `fund_profile.json` is an FR5 artifact concern; FR2 passes the
+entity in-process only.
 
 ## Instrumentation
 
@@ -91,6 +96,8 @@ omitted. A successful search that finds no fund is still `status=ok`; the
 
 ## Rate limits / fragility
 
-One run makes 2 Yahoo calls (search + quote summary); no rate limiting is
-configured in v1. Yahoo rate limits and scraping fragility remain operational
-risks (PRD §16); restore the previous working version if the boundary breaks.
+One run normally makes 2 Yahoo lookups (search + quote summary); the guarded
+stale-share-class fallback may query quote summary for a second symbol. No
+rate limiting is configured in v1. Yahoo rate limits and scraping fragility
+remain operational risks (PRD §16); restore the previous working version if
+the boundary breaks.

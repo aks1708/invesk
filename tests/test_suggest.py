@@ -14,9 +14,11 @@ class _FakeYf:
     def __init__(self, quotes: list[dict]):
         self._quotes = quotes
         self.queries: list[str] = []
+        self.max_results: list[int] = []
 
     def Search(self, query: str, max_results: int) -> _FakeSearch:
         self.queries.append(query)
+        self.max_results.append(max_results)
         return _FakeSearch(self._quotes)
 
 
@@ -29,21 +31,141 @@ def _quote(quote_type: str, shortname: str = "", longname: str = "") -> dict:
     }
 
 
-def test_yf_suggester_returns_fund_names_only_in_relevance_order() -> None:
+class _FakeScreenQuery:
+    valid_values = {"fundfamilyname": {"JPMorgan"}}
+
+    def __init__(self, operator: str, operands: list[str]) -> None:
+        self.operator = operator
+        self.operands = operands
+        self.quote_type = "ETF"
+
+
+class _FakeFundQuery(_FakeScreenQuery):
+    def __init__(self, operator: str, operands: list[str]) -> None:
+        super().__init__(operator, operands)
+        self.quote_type = "MUTUALFUND"
+
+
+class _FakeFamilyYf:
+    ETFQuery = _FakeScreenQuery
+    FundQuery = _FakeFundQuery
+
+    def __init__(self) -> None:
+        self.screen_calls: list[tuple[str, int]] = []
+
+    def screen(self, query, *, offset: int, size: int) -> dict:
+        self.screen_calls.append((query.quote_type, offset))
+        total = 252
+        quotes = [
+            {
+                "quoteType": query.quote_type,
+                "symbol": f"{query.quote_type}-{index}",
+                "longName": (
+                    "JPMorgan Fundamental Data Science Large Value ETF"
+                    if query.quote_type == "ETF" and index == 0
+                    else f"JPMorgan {query.quote_type} Fund {index}"
+                ),
+            }
+            for index in range(offset, min(offset + size, total))
+        ]
+        return {"total": total, "quotes": quotes}
+
+
+def test_yf_suggester_returns_all_matching_fund_names_in_relevance_order() -> None:
     yf = _FakeYf(
         [
-            _quote("ETF", shortname="Vanguard FTSE 250"),
+            _quote("ETF", shortname="JPMorgan Equity Premium Income ETF"),
             _quote("MUTUALFUND", longname="Fidelity International Index Fund"),
-            _quote("EQUITY", shortname="Vanguard Group Inc"),  # not a fund
-            _quote("ETF", longname="Vanguard FTSE 250 UCITS ETF"),
+            _quote("EQUITY", shortname="JPMorgan Chase & Co"),  # not a fund
+            _quote("ETF", longname="JPMorgan US Research Enhanced Index Equity ETF"),
+            _quote("ETF", longname="JP Morgan Income Fund"),
         ]
     )
     suggest = yf_suggester(yf)
-    assert suggest("vanguard") == [
-        "Vanguard FTSE 250",
-        "Fidelity International Index Fund",
-        "Vanguard FTSE 250 UCITS ETF",
+    assert suggest("jPmOrGaN") == [
+        "JPMorgan Equity Premium Income ETF",
+        "JPMorgan US Research Enhanced Index Equity ETF",
     ]
+    assert yf.max_results == [100]
+
+
+def test_yf_suggester_pages_all_etfs_and_mutual_funds_for_a_family() -> None:
+    yf = _FakeFamilyYf()
+
+    suggestions = yf_suggester(yf)("jPmOrGaN")
+
+    assert len(suggestions) == 504
+    assert suggestions[0] == "JPMorgan Fundamental Data Science Large Value ETF"
+    assert suggestions[252] == "JPMorgan MUTUALFUND Fund 0"
+    assert yf.screen_calls == [
+        ("ETF", 0),
+        ("ETF", 250),
+        ("MUTUALFUND", 0),
+        ("MUTUALFUND", 250),
+    ]
+
+
+def test_yf_suggester_matches_query_words_in_any_order() -> None:
+    suggest = yf_suggester(_FakeFamilyYf())
+
+    assert suggest("jpmorgan data science") == [
+        "JPMorgan Fundamental Data Science Large Value ETF"
+    ]
+    assert suggest("science JPMorgan data") == [
+        "JPMorgan Fundamental Data Science Large Value ETF"
+    ]
+
+
+def test_yf_suggester_expands_matching_index_to_tracking_funds() -> None:
+    class _IndexSearchYf:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def Search(self, query: str, max_results: int) -> _FakeSearch:
+            self.queries.append(query)
+            if query == "FTSE":
+                return _FakeSearch(
+                    [
+                        {
+                            "quoteType": "ETF",
+                            "symbol": "VWCE.DE",
+                            "longName": "Vanguard FTSE All-World UCITS ETF",
+                        },
+                        {
+                            "quoteType": "INDEX",
+                            "symbol": "^FTSE",
+                            "longName": "FTSE 100",
+                        },
+                    ]
+                )
+            return _FakeSearch(
+                [
+                    {
+                        "quoteType": "ETF",
+                        "symbol": "ISF.L",
+                        "longName": "iShares Core FTSE 100 UCITS ETF GBP",
+                    },
+                    {
+                        "quoteType": "ETF",
+                        "symbol": "VUKG.L",
+                        "longName": "Vanguard FTSE 100 UCITS ETF GBP Accumulation",
+                    },
+                    {
+                        "quoteType": "INDEX",
+                        "symbol": "^FTSE",
+                        "longName": "FTSE 100",
+                    },
+                ]
+            )
+
+    yf = _IndexSearchYf()
+
+    assert yf_suggester(yf)("FTSE") == [
+        "Vanguard FTSE All-World UCITS ETF",
+        "iShares Core FTSE 100 UCITS ETF GBP",
+        "Vanguard FTSE 100 UCITS ETF GBP Accumulation",
+    ]
+    assert yf.queries == ["FTSE", "FTSE 100"]
 
 
 def test_yf_suggester_deduplicates_and_skips_blank_names() -> None:
@@ -55,6 +177,20 @@ def test_yf_suggester_deduplicates_and_skips_blank_names() -> None:
         ]
     )
     assert yf_suggester(yf)("same") == ["Same Name"]
+
+
+def test_yf_suggester_uses_matching_shortname_if_longname_does_not_match() -> None:
+    yf = _FakeYf(
+        [
+            {
+                "symbol": "JPM",
+                "quoteType": "ETF",
+                "longname": "US Large Cap Equity ETF",
+                "shortname": "JPMorgan US Equity",
+            }
+        ]
+    )
+    assert yf_suggester(yf)("jpmorgan") == ["JPMorgan US Equity"]
 
 
 def test_yf_suggester_never_suggests_a_ticker_shortname() -> None:

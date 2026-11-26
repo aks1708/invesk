@@ -8,37 +8,25 @@ import {
   CircleHelp,
   Clock3,
   ExternalLink,
-  FileText,
+  Info,
   LoaderCircle,
   MessageCircle,
   Newspaper,
   RotateCcw,
-  Search,
   Send,
   ShieldCheck,
   Sparkles,
   TrendingUp,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Children, isValidElement, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Input } from "./components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Textarea } from "./components/ui/textarea";
-
-type Article = {
-  source_number: number;
-  title: string;
-  url: string;
-  source: string | null;
-  published: string | null;
-  summary: string | null;
-  content: string | null;
-};
 
 type Profile = {
   name: string;
@@ -61,7 +49,6 @@ type RunSnapshot = {
   failure: Failure | null;
   report?: string;
   profile?: Profile;
-  articles?: Article[];
 };
 
 type Evidence = {
@@ -88,7 +75,20 @@ type QAResponse = {
   insufficient: boolean;
 };
 
+function formatPublishedDate(value: string | null): string | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(timestamp);
+}
+
 function CitationTooltip({ source }: { source: Evidence }) {
+  const publishedDate = formatPublishedDate(source.published);
   return (
     <span className="chat-citation">
       <a
@@ -112,7 +112,7 @@ function CitationTooltip({ source }: { source: Evidence }) {
         </a>
         <span className="chat-citation-meta">
           {source.source || (source.kind === "web" ? "Web source" : "News source")}
-          {source.published ? ` · ${source.published}` : ""}
+          {publishedDate ? ` · ${publishedDate}` : ""}
         </span>
         {source.passages[0] && (
           <span className="chat-citation-excerpt">
@@ -180,6 +180,7 @@ function AnswerWithCitations({
 const stageLabels: Record<string, string> = {
   fund_extraction: "Fund data",
   news_search: "News research",
+  news_dedup: "Refining results",
   synthesis: "Insights",
   report: "Report",
 };
@@ -234,6 +235,7 @@ function Welcome({
 
   useEffect(() => {
     const query = fund.trim();
+    // Ignore a response for an older input value if a newer request has started.
     const requestId = ++requestNumber.current;
     setSelectedSuggestion(-1);
     setSuggestionsUnavailable(false);
@@ -245,7 +247,7 @@ function Welcome({
       return;
     }
 
-    if (query.length < 2) {
+    if (query.length < 1) {
       setSuggestions([]);
       setSuggestionsLoading(false);
       setSuggestionsVisible(false);
@@ -254,6 +256,7 @@ function Welcome({
 
     setSuggestions([]);
     setSuggestionsLoading(true);
+    // Debounce typing so each intermediate prefix doesn't trigger a Yahoo request.
     const timer = window.setTimeout(() => {
       void api<{ suggestions: string[] }>(
         `/suggestions?query=${encodeURIComponent(query)}`,
@@ -327,6 +330,7 @@ function Welcome({
   }
 
   function selectSuggestion(suggestion: string) {
+    // Selecting an existing result shouldn't immediately trigger another lookup.
     skipSuggestionQuery.current = true;
     setFund(suggestion);
     setSelectedSuggestion(-1);
@@ -389,7 +393,7 @@ function Welcome({
                 {suggestionsLoading && (
                   <LoaderCircle className="suggestion-loader spin" size={16} aria-label="Loading fund suggestions" />
                 )}
-                {suggestionsVisible && (suggestions.length > 0 || (fund.trim().length >= 2 && !suggestionsLoading && !suggestionsUnavailable)) && (
+                {suggestionsVisible && (suggestions.length > 0 || (fund.trim().length >= 1 && !suggestionsLoading && !suggestionsUnavailable)) && (
                   <div className="fund-suggestions" id="fund-suggestions" role="listbox" aria-label="Yahoo Finance fund suggestions">
                     {suggestions.length > 0 ? suggestions.map((suggestion, index) => (
                       <button
@@ -438,12 +442,12 @@ function Welcome({
                 )}
               </Button>
             </div>
-            {fund.trim().length >= 2 && (
+            {fund.trim().length >= 1 && (
               <div className="fund-suggestion-status" aria-live="polite">
                 {suggestionsUnavailable
                   ? "Suggestions are temporarily unavailable; you can still enter a fund name."
                   : suggestions.length > 0 && suggestionsVisible
-                    ? "Suggestions powered by Yahoo Finance."
+                    ? `${suggestions.length} matching funds from Yahoo Finance.`
                     : null}
               </div>
             )}
@@ -513,16 +517,15 @@ function ProgressView({
             Run needs attention
           </div>
         )}
-        <h1>{failed ? "We couldn’t finish this report." : "Putting the pieces together."}</h1>
-        <p className="progress-description">
-          {failed
-            ? `We ran into an issue while researching ${run.fund}.`
-            : `We’re researching ${run.fund}. This can take a few minutes.`}
-        </p>
+        {failed && <h1>We couldn’t finish this report.</h1>}
+        {failed && (
+          <p className="progress-description">
+            We ran into an issue while researching {run.fund}.
+          </p>
+        )}
         <Card className="progress-card">
           <CardHeader className="progress-card-header">
             <div>
-              <span className="eyebrow">Your analysis</span>
               <CardTitle className="progress-fund-name">{run.fund}</CardTitle>
             </div>
             <Badge>{failed ? "Needs attention" : run.status === "queued" ? "Queued" : "In progress"}</Badge>
@@ -560,13 +563,94 @@ function ProgressView({
   );
 }
 
-const STAGE_ORDER = ["fund_extraction", "news_search", "synthesis", "report"];
+const STAGE_ORDER = [
+  "fund_extraction",
+  "news_search",
+  "news_dedup",
+  "synthesis",
+  "report",
+];
 
-function ReportPanel({ report }: { report: string }) {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isInsideMarkdownStrong(markdown: string, offset: number): boolean {
+  // Count emphasis delimiters before the match so generated **...** isn't nested.
+  return (markdown.slice(0, offset).match(/\*\*/g)?.length ?? 0) % 2 === 1;
+}
+
+function highlightReportEntities(
+  markdown: string,
+  profile: Profile,
+): { markdown: string; entities: Set<string>; weights: Set<string> } {
+  // Mark weights already written in report prose before highlighting profile names,
+  // so the renderer can style each without introducing nested Markdown emphasis.
+  const entities = new Set<string>();
+  const weights = new Set<string>();
+  let result = markdown.replace(
+    /(^|\n)(\s*(?:[-*]\s+)?)([^\n(]+?)\s+\((\d+(?:\.\d+)?%)\s+weight\)/g,
+    (_match, lineBreak: string, prefix: string, label: string, weight: string) => {
+      const name = label.trim();
+      entities.add(name);
+      weights.add(weight);
+      return `${lineBreak}${prefix}**${name}** (**${weight}** weight)`;
+    },
+  );
+
+  const profileEntities = [
+    ...profile.holdings.map(({ name, weight }) => ({ name, weight })),
+    ...Object.entries(profile.sector_weights).map(([name, weight]) => ({
+      name,
+      weight,
+    })),
+  ].filter(({ name, weight }) => name && weight);
+  const entityPattern = profileEntities
+    .map(({ name }) => name)
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join("|");
+
+  if (entityPattern) {
+    result = result.replace(
+      new RegExp(`\\b(${entityPattern})\\b`, "gi"),
+      (match, _entity, offset: number, source: string) => {
+        entities.add(match);
+        return isInsideMarkdownStrong(source, offset) ? match : `**${match}**`;
+      },
+    );
+  }
+
+  for (const { name, weight } of profileEntities) {
+    const entityWeightPattern = new RegExp(
+      `\\b${escapeRegExp(name)}\\b([^\\n]{0,240}?)(${escapeRegExp(weight)})(?![\\d.])`,
+      "gi",
+    );
+    result = result.replace(
+      entityWeightPattern,
+      (
+        match,
+        _between: string,
+        matchedWeight: string,
+        offset: number,
+        source: string,
+      ) => {
+        const weightOffset = offset + match.length - matchedWeight.length;
+        weights.add(matchedWeight);
+        if (isInsideMarkdownStrong(source, weightOffset)) return match;
+        return `${match.slice(0, -matchedWeight.length)}**${matchedWeight}**`;
+      },
+    );
+  }
+
+  return { markdown: result, entities, weights };
+}
+
+function ReportPanel({ report, profile }: { report: string; profile: Profile }) {
   const reportWithoutMetadata = report.replace(
     /^#[^\r\n]*\r?\n(?:\r?\n)*Generated:[^\r\n]*\r?\n(?:\r?\n)*/,
     "",
-  );
+  ).replace(/^## Financial health\s*$/im, "");
   const reportWithoutSnapshot = reportWithoutMetadata
     .split(/(?=^## )/m)
     .filter((section) => !/^## Snapshot(?:\s|$)/im.test(section))
@@ -575,6 +659,11 @@ function ReportPanel({ report }: { report: string }) {
   const reportBody = sourcesHeading
     ? reportWithoutSnapshot.slice(0, sourcesHeading.index)
     : reportWithoutSnapshot;
+  const {
+    markdown: highlightedReportBody,
+    entities: highlightedEntities,
+    weights: highlightedWeights,
+  } = highlightReportEntities(reportBody, profile);
   const sourcesMarkdown = sourcesHeading
     ? reportWithoutSnapshot.slice(
         sourcesHeading.index! + sourcesHeading[0].length,
@@ -591,11 +680,12 @@ function ReportPanel({ report }: { report: string }) {
     }),
   );
   const sourcesByNumber = new Map(sources.map((source) => [source.number, source]));
-  const linkedBody = reportBody.replace(
+  const linkedBody = highlightedReportBody.replace(
     /\[(\d+(?:\s*,\s*\d+)*)\]/g,
     (marker, citationList: string) => {
       const numbers = citationList.split(",").map((number) => Number(number.trim()));
       const citedSources = numbers.map((number) => sourcesByNumber.get(number));
+      // Leave unknown markers untouched rather than linking them to the wrong source.
       if (citedSources.some((source) => !source)) return marker;
       return (
         "[" +
@@ -610,11 +700,85 @@ function ReportPanel({ report }: { report: string }) {
     },
   );
 
+  function plainText(node: ReactNode): string {
+    if (typeof node === "string" || typeof node === "number") {
+      return String(node);
+    }
+    if (Array.isArray(node)) return node.map(plainText).join("");
+    if (isValidElement<{ children?: ReactNode }>(node)) {
+      return plainText(node.props.children);
+    }
+    return "";
+  }
+
   function renderMarkdown(markdown: string) {
     return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          strong: ({ children }) => {
+            const text = Array.isArray(children)
+              ? children
+                  .map((child) =>
+                    typeof child === "string" || typeof child === "number"
+                      ? String(child)
+                      : "",
+                  )
+                  .join("")
+              : typeof children === "string" || typeof children === "number"
+                ? String(children)
+                : "";
+            const className = highlightedEntities.has(text)
+              ? "report-entity-highlight"
+              : highlightedWeights.has(text)
+                ? "report-weight-highlight"
+                : undefined;
+            return <strong className={className}>{children}</strong>;
+          },
+          table: ({ children }) => <div className="metric-grid">{children}</div>,
+          thead: () => null,
+          tbody: ({ children }) => (
+            <div className="metric-card-grid">{children}</div>
+          ),
+          tr: ({ children }) => {
+            const cells = Children.toArray(children).filter(isValidElement);
+            if (cells.some((cell) => cell.type === "th")) return null;
+            const values = cells.map(
+              (cell) =>
+                (cell.props as { children?: ReactNode }).children ?? null,
+            );
+            const [metric, value, definition] = values;
+            const metricName = plainText(metric).trim();
+            if (!metricName || value == null) return null;
+            const tooltipId = `metric-definition-${metricName
+              .toLocaleLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")}`;
+            return (
+              <article className="metric-card">
+                <div className="metric-card-heading">
+                  <strong>{metric}</strong>
+                  {definition != null && (
+                    <button
+                      type="button"
+                      className="metric-info"
+                      aria-label={`Definition of ${metricName}`}
+                      aria-describedby={tooltipId}
+                    >
+                      <Info size={14} aria-hidden="true" />
+                      <span
+                        id={tooltipId}
+                        className="metric-tooltip"
+                        role="tooltip"
+                      >
+                        {definition}
+                      </span>
+                    </button>
+                  )}
+                </div>
+                <div className="metric-card-value">{value}</div>
+              </article>
+            );
+          },
           a: ({ href, title, children }) => (
             <a
               href={href}
@@ -627,7 +791,6 @@ function ReportPanel({ report }: { report: string }) {
               {!title && <ExternalLink size={12} />}
             </a>
           ),
-          table: ({ children }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
         }}
       >
         {markdown}
@@ -647,104 +810,6 @@ function ReportPanel({ report }: { report: string }) {
         </details>
       )}
     </>
-  );
-}
-
-function ArticleBrowser({
-  articles,
-  selected,
-  onSelect,
-}: {
-  articles: Article[];
-  selected: Article | null;
-  onSelect: (article: Article) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const matches = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    if (!normalized) return articles;
-    return articles.filter((article) =>
-      [
-        article.title,
-        article.source,
-        article.published,
-        article.summary,
-        article.content,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLocaleLowerCase()
-        .includes(normalized),
-    );
-  }, [articles, query]);
-
-  return (
-    <div className="article-browser">
-      <div className="article-toolbar">
-        <div>
-          <h2>Collected news</h2>
-          <p>Search every article saved for this run, including uncited sources.</p>
-        </div>
-        <Badge><Newspaper size={12} /> {articles.length} articles</Badge>
-      </div>
-      <div className="article-search">
-        <Search size={16} />
-        <Input
-          aria-label="Search collected articles"
-          placeholder="Search titles, sources, or article text"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        {query && <button className="clear-search" onClick={() => setQuery("")} aria-label="Clear search"><X size={15} /></button>}
-      </div>
-      <div className="article-layout">
-        <div className="article-results" aria-label="Search results">
-          <div className="result-count">{matches.length} {matches.length === 1 ? "result" : "results"}</div>
-          {matches.length === 0 ? (
-            <div className="article-empty"><Search size={20} /><strong>No articles found</strong><span>Try another keyword.</span></div>
-          ) : matches.map((article) => (
-            <button
-              className={`article-result ${selected?.source_number === article.source_number ? "article-result-active" : ""}`}
-              key={article.source_number}
-              onClick={() => onSelect(article)}
-            >
-              <div className="article-result-meta">
-                <span className="source-number">[{article.source_number}]</span>
-                <span>{article.source || "News source"}</span>
-                <span className="meta-separator">·</span>
-                <span>{article.published || "Date unavailable"}</span>
-              </div>
-              <strong>{article.title}</strong>
-              <p>{article.summary || article.content?.slice(0, 150) || "No article summary is available."}</p>
-            </button>
-          ))}
-        </div>
-        <div className="article-reader">
-          {selected ? (
-            <>
-              <div className="reader-meta"><Badge>[{selected.source_number}] Source</Badge><span>{selected.source || "News source"} · {selected.published || "Date unavailable"}</span></div>
-              <h3>{selected.title}</h3>
-              <a className="reader-link" href={selected.url} target="_blank" rel="noreferrer">
-                Read original article <ArrowUpRight size={14} />
-              </a>
-              <div className="reader-rule" />
-              <div className="reader-content">
-                {(selected.content || selected.summary || "No article text was collected for this source.")
-                  .split(/\n{2,}/)
-                  .map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-              </div>
-              <p className="reader-note">Article text is shown as collected for this report. The full source may have changed.</p>
-            </>
-          ) : (
-            <div className="reader-placeholder">
-              <span className="reader-placeholder-icon"><FileText size={20} /></span>
-              <strong>Select an article to read</strong>
-              <span>Browse the saved sources without leaving your research.</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -770,7 +835,12 @@ function ChatPanel({ runId }: {
     if (!value || sending || resetting) return;
     setError(null);
     setQuestion("");
-    setMessages((previous) => [...previous, { role: "user", content: value }]);
+    const assistantIndex = messages.length + 1;
+    setMessages((previous) => [
+      ...previous,
+      { role: "user", content: value },
+      { role: "assistant", content: "" },
+    ]);
     setSending(true);
     setPendingStatus("thinking");
     const statusPoll = window.setInterval(() => {
@@ -783,26 +853,97 @@ function ChatPanel({ runId }: {
         .catch(() => {});
     }, 400);
     try {
-      const result = await api<QAResponse>(
-        `/runs/${runId}/questions`,
-        { method: "POST", body: JSON.stringify({ question: value }) },
-      );
-      setMessages((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          content: result.answer,
-          evidence: result.evidence,
-          insufficient: result.insufficient,
-        },
-      ]);
+      const response = await fetch(`/api/runs/${runId}/questions/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: value }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as {
+          detail?: string;
+        };
+        throw new Error(body.detail ?? "Something went wrong. Please try again.");
+      }
+      if (!response.body) throw new Error("The answer stream could not be opened.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let receivedResult = false;
+      const handleEvent = (frame: string) => {
+        const data = frame
+          .split("\n")
+          .find((line) => line.startsWith("data: "))
+          ?.slice("data: ".length);
+        if (!data) return;
+        const event = JSON.parse(data) as
+          | { type: "token"; text: string }
+          | { type: "reset" }
+          | { type: "done"; result: QAResponse }
+          | { type: "error"; message: string };
+        if (event.type === "token") {
+          setMessages((previous) =>
+            previous.map((message, index) =>
+              index === assistantIndex
+                ? { ...message, content: message.content + event.text }
+                : message,
+            ),
+          );
+        } else if (event.type === "reset") {
+          setMessages((previous) =>
+            previous.map((message, index) =>
+              index === assistantIndex ? { ...message, content: "" } : message,
+            ),
+          );
+        } else if (event.type === "done") {
+          receivedResult = true;
+          setMessages((previous) =>
+            previous.map((message, index) =>
+              index === assistantIndex
+                ? {
+                    ...message,
+                    content: event.result.answer,
+                    evidence: event.result.evidence,
+                    insufficient: event.result.insufficient,
+                  }
+                : message,
+            ),
+          );
+        } else {
+          throw new Error(event.message);
+        }
+      };
+
+      while (true) {
+        const { value: chunk, done } = await reader.read();
+        buffer += decoder.decode(chunk, { stream: !done });
+        let frameEnd = buffer.indexOf("\n\n");
+        while (frameEnd >= 0) {
+          handleEvent(buffer.slice(0, frameEnd));
+          buffer = buffer.slice(frameEnd + 2);
+          frameEnd = buffer.indexOf("\n\n");
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) {
+        handleEvent(buffer);
+      }
+      if (!receivedResult) {
+        throw new Error("The answer stream ended before the answer was complete.");
+      }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Could not get an answer.";
       setError(message);
-      setMessages((previous) => [
-        ...previous,
-        { role: "assistant", content: "I couldn’t answer that just now. Your run is still here—please try again." },
-      ]);
+      setMessages((previous) =>
+        previous.map((item, index) =>
+          index === assistantIndex
+            ? {
+                role: "assistant",
+                content: "I couldn’t answer that just now. Your run is still here—please try again.",
+              }
+            : item,
+        ),
+      );
     } finally {
       window.clearInterval(statusPoll);
       setSending(false);
@@ -884,18 +1025,11 @@ function ChatPanel({ runId }: {
       </div>
       <div className="chat-bottom">
         {error && <div className="chat-error" role="alert">{error}</div>}
-        {messages.length === 0 && (
-          <div className="suggested-questions">
-            <span>Try asking</span>
-            <button onClick={() => setQuestion("What are the largest holdings in this fund?")}>What are the largest holdings?</button>
-            <button onClick={() => setQuestion("What recent news could affect this fund?")}>What news could affect it?</button>
-          </div>
-        )}
         <form className="chat-composer" onSubmit={sendQuestion}>
           <Textarea
             ref={inputRef}
             aria-label="Ask a question about this report"
-            placeholder="Ask a follow-up question…"
+            placeholder="Fire away with your question…"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             onKeyDown={onKeyDown}
@@ -920,10 +1054,6 @@ function Workspace({
   run: RunSnapshot;
   onNew: () => void;
 }) {
-  const [tab, setTab] = useState("report");
-  const [selectedArticleNumber, setSelectedArticleNumber] = useState<number | null>(null);
-  const articles = run.articles ?? [];
-  const selected = articles.find((article) => article.source_number === selectedArticleNumber) ?? null;
   const profile = run.profile!;
   const generatedAt = run.report?.match(/^Generated:\s*(.+)$/m)?.[1] ?? "—";
 
@@ -945,26 +1075,7 @@ function Workspace({
         <div className="workspace-grid">
           <section className="research-column">
             <div className="research-panel">
-              <div className="research-panel-header">
-                <Tabs value={tab} onValueChange={setTab}>
-                  <TabsList>
-                    <TabsTrigger value="report"><FileText size={14} /> Report</TabsTrigger>
-                    <TabsTrigger value="articles"><Newspaper size={14} /> Articles <span className="tab-count">{articles.length}</span></TabsTrigger>
-                  </TabsList>
-                </Tabs>
-              </div>
-              <Tabs value={tab} onValueChange={setTab}>
-                <TabsContent value="report">
-                  <ReportPanel report={run.report ?? ""} />
-                </TabsContent>
-                <TabsContent value="articles">
-                  <ArticleBrowser
-                    articles={articles}
-                    selected={selected}
-                    onSelect={(article) => setSelectedArticleNumber(article.source_number)}
-                  />
-                </TabsContent>
-              </Tabs>
+              <ReportPanel report={run.report ?? ""} profile={profile} />
             </div>
             <div className="workspace-disclaimer"><ShieldCheck size={15} /><span>For information and research only. Not personalized financial advice or a buy/sell recommendation.</span></div>
           </section>

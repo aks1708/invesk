@@ -6,8 +6,29 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import src.web.app as web_app
+import src.web.__main__ as web_main
 from src.core.config import EXIT_OK
 from src.qa.retrieve import Passage
+
+
+def test_web_entrypoint_defaults_to_port_8001_and_allows_override(monkeypatch):
+    calls = []
+    monkeypatch.setattr(web_main.uvicorn, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.delenv("INVESK_WEB_HOST", raising=False)
+    monkeypatch.delenv("INVESK_WEB_PORT", raising=False)
+
+    web_main.main()
+
+    assert calls[-1][1] == {
+        "host": "127.0.0.1",
+        "port": 8001,
+        "reload": False,
+    }
+    monkeypatch.setenv("INVESK_WEB_PORT", "8123")
+
+    web_main.main()
+
+    assert calls[-1][1]["port"] == 8123
 
 
 class InlineExecutor:
@@ -176,24 +197,25 @@ def test_browser_rejects_blank_fund_names():
     assert response.status_code == 422
 
 
-def test_fund_suggestions_filter_funds_and_cap_results(monkeypatch):
+def test_fund_suggestions_return_all_suggester_results(monkeypatch):
     queries = []
     monkeypatch.setattr(
         web_app,
         "_get_fund_suggester",
         lambda: lambda query: queries.append(query)
-        or [f"Fund {index}" for index in range(8)],
+        or [f"Fund {index}" for index in range(125)],
     )
     client = TestClient(web_app.app)
 
-    assert client.get("/api/suggestions?query=%20a%20").json() == {
-        "suggestions": []
-    }
+    one_character = client.get("/api/suggestions?query=%20a%20")
+    assert one_character.json()["suggestions"] == [
+        f"Fund {index}" for index in range(125)
+    ]
     result = client.get("/api/suggestions?query=%20acme%20")
 
     assert result.status_code == 200
-    assert queries == ["acme"]
-    assert result.json()["suggestions"] == [f"Fund {index}" for index in range(6)]
+    assert queries == ["a", "acme"]
+    assert result.json()["suggestions"] == [f"Fund {index}" for index in range(125)]
 
 
 def test_fund_suggestions_are_best_effort(monkeypatch):

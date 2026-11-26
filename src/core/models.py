@@ -63,7 +63,7 @@ class NewsItem:
     spec 2.0.0 returns no per-result score); `related` names the holding or
     sector the query targeted — the news is only ever news *about what the
     fund holds*. `summary` is Exa's generated digest and `content` the
-    result's page text (first 10000 characters; both requested per search).
+    result's full page text (requested per search).
     """
 
     title: str

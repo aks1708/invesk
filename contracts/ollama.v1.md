@@ -92,8 +92,9 @@ Sections, in order:
    sub-blocks: `Company news:` (items whose entity is a holding) and
    `Sector news:` (items whose entity is a sector weight). Each line is
    `[S<n>] [about: entity] title — source (published): summary URL`, followed
-   by an indented `Content: <page text>` line when text was retrieved (first
-   10000 characters, FR3); the prompt tells the model to draw on it for depth,
+   by an indented `Content: <page text>` line when text was retrieved
+   (full article, Markdown-style, no HTML tags; FR3 search options:
+   `max_characters=None`, `verbosity=compact`); the prompt tells the model to draw on it for depth,
    paraphrasing rather than quoting wholesale. When news is empty (FR3 degrade
    mode), the block says so and both insight sections must report it.
 6. Output schema: reply with ONLY one JSON object —
@@ -170,7 +171,7 @@ markers (`[1]`, `[2]`, …). Multiple tokens may be grouped in one bracket pair
 The validator checks citation references and presence, not whether the cited
 article substantively supports each claim.
 
-## ReportSections entity (schema_version 5)
+## `ReportSections` entity
 
 | Field | Type | Notes |
 |---|---|---|

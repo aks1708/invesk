@@ -54,6 +54,7 @@ returned by Yahoo appear.
 
 One object: `schema_version` (int `2`), `news` (array of `{title, url,
 source, published` (string or null)`, summary` (string or null)`, content`
-(string or null, the result's page text, first 10000 characters)`,
+(string or null, the result's full Markdown page text, stored as returned without
+truncation or formatting changes)`,
 relevance` (int)`, related` (array of strings)`}`) — the deduplicated
 `NewsItem[]`, in run order.

@@ -48,7 +48,7 @@ a { color: inherit; }
 .fund-field-wrap input { height: 52px; padding-right: 42px; }
 .fund-input-row button { height: 52px; padding-left: 19px; padding-right: 19px; flex: 0 0 auto; }
 .suggestion-loader { position: absolute; right: 13px; top: 18px; color: #748a78; }
-.fund-suggestions { position: absolute; z-index: 20; top: calc(100% + 7px); left: 0; right: 0; overflow: hidden; padding: 5px; background: white; border: 1px solid #e4e9e3; border-radius: 13px; box-shadow: 0 14px 32px #213a2c1c; }
+.fund-suggestions { position: absolute; z-index: 20; top: calc(100% + 7px); left: 0; right: 0; max-height: min(50vh, 360px); overflow-y: auto; padding: 5px; background: white; border: 1px solid #e4e9e3; border-radius: 13px; box-shadow: 0 14px 32px #213a2c1c; }
 .fund-suggestion { display: flex; align-items: center; width: 100%; min-height: 39px; gap: 9px; padding: 7px 9px; border: 0; border-radius: 8px; text-align: left; background: transparent; color: #465248; font-size: 11px; }
 .fund-suggestion:hover, .fund-suggestion-active { background: #eee8f6; color: #493568; }
 .fund-suggestion-active { box-shadow: inset 0 0 0 1px #a78bc7; font-weight: 650; }
@@ -571,3 +571,119 @@ a { color: inherit; }
 .article-result-active { background: #2a1725 !important; box-shadow: inset 2px 0 #e044a6; }
 .reader-meta .inline-flex { color: #f0a0d0; background: #35182d; }
 .reader-placeholder-icon { color: #ed92c5; background: #32182c; }
+.report-markdown strong.report-entity-highlight {
+  color: #f080bf;
+  font-weight: 750;
+}
+.report-markdown strong.report-weight-highlight {
+  color: #fff;
+  font-weight: 750;
+}
+.metric-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.metric-card {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #303a33;
+  border-radius: 12px;
+  background: #131914;
+}
+.metric-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  color: #dce6de;
+  font-size: 11px;
+  font-weight: 650;
+}
+.metric-info {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #58404f;
+  border-radius: 50%;
+  color: #f080bf;
+  background: #251820;
+}
+.metric-info:hover,
+.metric-info:focus-visible {
+  border-color: #e044a6;
+  color: #ffb5db;
+  outline: none;
+}
+.metric-tooltip {
+  position: absolute;
+  z-index: 10;
+  right: -5px;
+  bottom: calc(100% + 9px);
+  display: none;
+  width: min(280px, calc(100vw - 64px));
+  padding: 11px 12px;
+  border: 1px solid #594052;
+  border-radius: 9px;
+  color: #e1d5dd;
+  background: #211820;
+  box-shadow: 0 10px 28px #0009;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.55;
+  text-align: left;
+}
+.metric-info:hover .metric-tooltip,
+.metric-info:focus .metric-tooltip {
+  display: block;
+}
+.metric-card-value {
+  margin-top: 13px;
+  color: #f080bf;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -.4px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 560px) {
+  .metric-card-grid { grid-template-columns: 1fr; }
+}
+
+/* Slightly larger type for chat and the article browser. */
+.chat-header-copy strong { font-size: 13px; }
+.chat-header-copy span,
+.chat-context,
+.chat-reset-button { font-size: 10px; }
+.message-body { font-size: 14px; }
+.message-time,
+.evidence-heading,
+.evidence-source-number,
+.evidence-copy strong,
+.evidence-quote,
+.chat-citation-meta,
+.insufficient-note,
+.chat-error { font-size: 10px; }
+.evidence-copy small,
+.suggested-questions > span,
+.suggested-questions button,
+.chat-footnote { font-size: 9px; }
+.chat-citation-excerpt { font-size: 11px; }
+.typing-indicator { font-size: 11px; }
+.chat-composer textarea { font-size: 11px; }
+
+.article-toolbar h2 { font-size: 15px; }
+.article-toolbar p,
+.article-search input,
+.result-count,
+.reader-meta,
+.reader-link,
+.reader-content { font-size: 11px; }
+.article-result-meta,
+.article-result > p,
+.reader-note { font-size: 10px; }
+.article-result > strong { font-size: 11px; }

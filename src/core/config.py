@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.dedupe import DedupeConfig
 from src.search.search import SearchConfig
 
 EXIT_OK = 0
@@ -79,7 +80,9 @@ def compose_env(env: Mapping[str, str] | None) -> dict[str, str]:
     return merged
 
 
-def _int_env(env: Mapping[str, str], name: str, default: int) -> int:
+def _int_env(
+    env: Mapping[str, str], name: str, default: int, *, maximum: int | None = None
+) -> int:
     raw = (env.get(name) or "").strip()
     if not raw:
         return default
@@ -89,6 +92,8 @@ def _int_env(env: Mapping[str, str], name: str, default: int) -> int:
         raise UsageError(f"{name} must be an integer, got {raw!r}") from None
     if value < 1:
         raise UsageError(f"{name} must be at least 1, got {value}")
+    if maximum is not None and value > maximum:
+        raise UsageError(f"{name} must be at most {maximum}, got {value}")
     return value
 
 
@@ -110,9 +115,34 @@ def parse_search_config(env: Mapping[str, str]) -> SearchConfig:
     Invalid values are usage errors detected before any external call.
     """
     return SearchConfig(
-        max_searches=_int_env(env, "EXA_MAX_SEARCHES", 10),
-        results_per_search=_int_env(env, "EXA_RESULTS_PER_SEARCH", 5),
+        max_searches=_int_env(env, "EXA_MAX_SEARCHES", 10, maximum=10),
+        results_per_search=_int_env(
+            env, "EXA_RESULTS_PER_SEARCH", 5, maximum=5
+        ),
         window_days=_int_env(env, "EXA_WINDOW_DAYS", 90),
         max_parallel=_int_env(env, "EXA_MAX_PARALLEL", 4),
         degrade_on_total_failure=_bool_env(env, "EXA_DEGRADE_ON_FAILURE", True),
+    )
+
+
+def parse_dedupe_config(env: Mapping[str, str]) -> DedupeConfig:
+    """Embedding/dedupe environment overrides; reject them before provider calls."""
+    model = (env.get("DEDUPE_EMBED_MODEL") or "embeddinggemma-2").strip()
+    if not model:
+        raise UsageError("DEDUPE_EMBED_MODEL must not be blank")
+    raw_threshold = (env.get("DEDUPE_SIMILARITY_THRESHOLD") or "").strip()
+    try:
+        threshold = float(raw_threshold) if raw_threshold else 0.9
+    except ValueError:
+        raise UsageError(
+            "DEDUPE_SIMILARITY_THRESHOLD must be a number between 0 and 1"
+        ) from None
+    if not 0 <= threshold <= 1:
+        raise UsageError(
+            "DEDUPE_SIMILARITY_THRESHOLD must be a number between 0 and 1"
+        )
+    return DedupeConfig(
+        embed_model=model,
+        similarity_threshold=threshold,
+        max_chars=_int_env(env, "DEDUPE_MAX_CHARS", 4000),
     )

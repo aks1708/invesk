@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.config import EXIT_OK, EXIT_RUNTIME_FAILURE
+from src.dedupe import DedupeConfig, deduplicate_news
 from src.core.events import EventEmitter
 from src.core.models import RunInput
 from src.extraction.extraction import ExtractionError, FundNotFoundError, extract_fund
@@ -33,6 +34,7 @@ def _run_stages(
     *,
     run_dir: Path,
     config: SearchConfig,
+    dedupe_config: DedupeConfig | None = None,
     api_key: str | None,
     exa_factory: Callable[[str], Any],
     ollama_client_factory: Callable[[], Any],
@@ -93,9 +95,28 @@ def _run_stages(
             detail=str(exc),
         ), None
     if on_stage_started is not None:
+        on_stage_started("news_dedup")
+    semantic_config = dedupe_config or DedupeConfig()
+    embedding_client = None
+    embedding_error: Exception | None = None
+    if news:
+        try:
+            embedding_client = ollama_client_factory()
+        except Exception as exc:
+            embedding_error = exc
+    news = deduplicate_news(
+        news,
+        config=semantic_config,
+        ollama=embedding_client,
+        events=events,
+        embedding_error=embedding_error,
+    )
+    if on_stage_started is not None:
         on_stage_started("synthesis")
     try:
-        client = ollama_client_factory()
+        # Reuse the embedding client when one was needed; empty-news runs only
+        # construct an Ollama client here for synthesis.
+        client = embedding_client or ollama_client_factory()
     except Exception as exc:
         return _fail_run(
             events,

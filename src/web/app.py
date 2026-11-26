@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -21,6 +23,7 @@ from src.core.config import (
     UsageError,
     compose_env,
     default_run_id,
+    parse_dedupe_config,
     parse_search_config,
     slugify,
 )
@@ -28,7 +31,6 @@ from src.core.pipeline import _run_stages
 from src.core.events import EventEmitter
 from src.core.models import RunInput
 from src.fund_suggestions import (
-    MAX_SUGGESTIONS,
     MIN_QUERY_LEN,
     cached_suggester,
     yf_suggester,
@@ -44,7 +46,13 @@ from src.reporting.report import write_report
 from src.search.search import exa_client
 from src.synthesis.synthesis import ollama_client as synthesis_ollama_client
 
-STAGES = ("fund_extraction", "news_search", "synthesis", "report")
+STAGES = (
+    "fund_extraction",
+    "news_search",
+    "news_dedup",
+    "synthesis",
+    "report",
+)
 _fund_suggester: Any | None = None
 _fund_suggester_lock = threading.Lock()
 
@@ -141,6 +149,7 @@ class RunManager:
                 try:
                     env = compose_env(None)
                     config = parse_search_config(env)
+                    dedupe_config = parse_dedupe_config(env)
                 except UsageError as exc:
                     events.emit(
                         "run_failed",
@@ -185,6 +194,7 @@ class RunManager:
                     yf,
                     run_dir=job.run_dir,
                     config=config,
+                    dedupe_config=dedupe_config,
                     api_key=api_key,
                     exa_factory=exa_client,
                     ollama_client_factory=synthesis_ollama_client,
@@ -330,7 +340,7 @@ def fund_suggestions(query: str = "") -> dict[str, list[str]]:
     except Exception:
         # Suggestions are best-effort; never block fund entry.
         return {"suggestions": []}
-    return {"suggestions": suggestions[:MAX_SUGGESTIONS]}
+    return {"suggestions": suggestions}
 
 
 @app.post("/api/runs", status_code=202)
@@ -361,14 +371,20 @@ def reset_chat(run_id: str) -> dict[str, bool]:
     return {"reset": True}
 
 
-@app.post("/api/runs/{run_id}/questions")
-def ask_question(run_id: str, request: QuestionRequest) -> dict[str, Any]:
+def _answer_question(
+    run_id: str,
+    request: QuestionRequest,
+    *,
+    token_callback: Any | None = None,
+) -> dict[str, Any]:
     job = manager.get(run_id)
     if job.status != "succeeded":
         raise HTTPException(
             status_code=409, detail="Chat is available after the report is complete"
         )
 
+    # Keep each run's turns ordered: rewriting, answering, and appending history
+    # must finish before the next request reads that history.
     with job.qa_lock:
         try:
             run: QARun = load_run(job.run_dir)
@@ -389,22 +405,25 @@ def ask_question(run_id: str, request: QuestionRequest) -> dict[str, Any]:
                     job.qa_started = True
                 try:
                     client = ollama_client()
+                    env = compose_env(None)
                     job.qa_status = "thinking"
                     try:
+                        ask_options = {
+                            "status_callback": lambda status: setattr(
+                                job, "qa_status", status
+                            )
+                        }
+                        if token_callback is not None:
+                            ask_options["token_callback"] = token_callback
                         result = _ask_turn(
                             run,
                             request.question,
                             job.qa_history,
                             client,
                             events,
-                            exa_api_key=(
-                                (compose_env(None).get("EXA_API_KEY") or "").strip()
-                                or None
-                            ),
+                            exa_api_key=(env.get("EXA_API_KEY") or "").strip() or None,
                             exa_factory=exa_client,
-                            status_callback=lambda status: setattr(
-                                job, "qa_status", status
-                            ),
+                            **ask_options,
                         )
                     finally:
                         job.qa_status = None
@@ -501,6 +520,64 @@ def ask_question(run_id: str, request: QuestionRequest) -> dict[str, Any]:
             raise HTTPException(
                 status_code=500, detail="Could not access this run's artifacts"
             ) from exc
+
+
+@app.post("/api/runs/{run_id}/questions")
+def ask_question(run_id: str, request: QuestionRequest) -> dict[str, Any]:
+    return _answer_question(run_id, request)
+
+
+@app.post("/api/runs/{run_id}/questions/stream")
+def ask_question_stream(run_id: str, request: QuestionRequest) -> StreamingResponse:
+    job = manager.get(run_id)
+    if job.status != "succeeded":
+        raise HTTPException(
+            status_code=409, detail="Chat is available after the report is complete"
+        )
+
+    events: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    def emit_token(text: str | None) -> None:
+        if text is None:
+            events.put({"type": "reset"})
+        else:
+            events.put({"type": "token", "text": text})
+
+    def answer_in_background() -> None:
+        try:
+            result = _answer_question(
+                run_id, request, token_callback=emit_token
+            )
+            events.put({"type": "done", "result": result})
+        except HTTPException as exc:
+            events.put({"type": "error", "message": str(exc.detail)})
+        except Exception:
+            events.put(
+                {
+                    "type": "error",
+                    "message": "The AI service is unavailable. Please try again.",
+                }
+            )
+        finally:
+            events.put(None)
+
+    threading.Thread(target=answer_in_background, daemon=True).start()
+
+    def stream_events():
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        stream_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

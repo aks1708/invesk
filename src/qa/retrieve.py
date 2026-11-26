@@ -9,9 +9,12 @@ from dataclasses import dataclass
 
 from src.qa.corpus import QANewsItem
 
-QA_MAX_PASSAGES = 12
+QA_MAX_PASSAGES = 15
 QA_EVIDENCE_MAX_CHARS = 24000
 QA_HISTORY_TURNS = 3
+QA_PASSAGE_MAX_CHARS = 1200
+QA_PASSAGE_OVERLAP_CHARS = 150
+_PASSAGE_STEP_CHARS = QA_PASSAGE_MAX_CHARS - QA_PASSAGE_OVERLAP_CHARS
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
@@ -49,10 +52,10 @@ def _sentence_ranges(text: str, start: int, end: int) -> list[tuple[int, int]]:
     cursor = start
     for match in _SENTENCE_END_RE.finditer(text, start, end):
         stop = match.start()
-        while stop - cursor > 1200:
-            split = text.rfind(" ", cursor, cursor + 1200)
+        while stop - cursor > _PASSAGE_STEP_CHARS:
+            split = text.rfind(" ", cursor, cursor + _PASSAGE_STEP_CHARS)
             if split <= cursor:
-                split = cursor + 1200
+                split = cursor + _PASSAGE_STEP_CHARS
             ranges.append((cursor, split))
             cursor = split
             while cursor < end and text[cursor].isspace():
@@ -60,10 +63,10 @@ def _sentence_ranges(text: str, start: int, end: int) -> list[tuple[int, int]]:
         if stop > cursor:
             ranges.append((cursor, stop))
         cursor = match.end()
-    while end - cursor > 1200:
-        split = text.rfind(" ", cursor, cursor + 1200)
+    while end - cursor > _PASSAGE_STEP_CHARS:
+        split = text.rfind(" ", cursor, cursor + _PASSAGE_STEP_CHARS)
         if split <= cursor:
-            split = cursor + 1200
+            split = cursor + _PASSAGE_STEP_CHARS
         ranges.append((cursor, split))
         cursor = split
         while cursor < end and text[cursor].isspace():
@@ -76,7 +79,7 @@ def _sentence_ranges(text: str, start: int, end: int) -> list[tuple[int, int]]:
 def _passage_ranges(text: str) -> list[tuple[int, int]]:
     blocks: list[tuple[int, int]] = []
     for start, end in _paragraph_ranges(text):
-        if end - start <= 1200:
+        if end - start <= _PASSAGE_STEP_CHARS:
             blocks.append((start, end))
         else:
             blocks.extend(_sentence_ranges(text, start, end))
@@ -87,21 +90,32 @@ def _passage_ranges(text: str) -> list[tuple[int, int]]:
     for start, end in blocks:
         if pending_start is None:
             pending_start, pending_end = start, end
-        elif end - pending_start <= 1200:
+        elif end - pending_start <= _PASSAGE_STEP_CHARS:
             pending_end = end
         else:
             passages.append((pending_start, pending_end))
             pending_start, pending_end = start, end
+        # Avoid indexing very short fragments by joining them with the next block.
         if pending_start is not None and pending_end - pending_start >= 400:
             passages.append((pending_start, pending_end))
             pending_start = None
     if pending_start is not None:
         passages.append((pending_start, pending_end))
-    return [
+    nonempty = [
         (start, end)
         for start, end in passages
         if text[start:end].strip()
     ]
+    # Keep a small overlap so a fact or caveat near a chunk boundary remains
+    # available when either neighboring passage is retrieved on its own.
+    overlapping: list[tuple[int, int]] = []
+    for start, end in nonempty:
+        if overlapping:
+            previous_start, previous_end = overlapping[-1]
+            start = min(start, previous_end - QA_PASSAGE_OVERLAP_CHARS)
+            start = max(start, end - QA_PASSAGE_MAX_CHARS, previous_start)
+        overlapping.append((start, end))
+    return overlapping
 
 
 def build_passages(news: tuple[QANewsItem, ...] | list[QANewsItem]) -> list[Passage]:
@@ -133,6 +147,7 @@ def build_passages(news: tuple[QANewsItem, ...] | list[QANewsItem]) -> list[Pass
 
 
 def _bm25(query_terms: list[str], documents: list[list[str]]) -> list[float]:
+    # BM25's k1=1.2 and b=0.75 balance term frequency against document length.
     if not query_terms or not documents:
         return [0.0] * len(documents)
     doc_lengths = [len(doc) for doc in documents]
@@ -171,6 +186,8 @@ def retrieve(
     ranked: list[Passage] = []
     for passage, score in zip(passages, scores):
         title_terms = set(_tokens(passage.title))
+        # Headlines often contain the entity even when the article text uses a
+        # pronoun, so give exact title-term matches a modest retrieval boost.
         score += 0.35 * len(query_set & title_terms)
         if score <= 0:
             continue

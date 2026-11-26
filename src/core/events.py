@@ -51,6 +51,11 @@ class EventEmitter:
         self._clock = clock
         self._sink = sink
 
+    @property
+    def run_id(self) -> str:
+        """The run scope used by downstream artifact and index writers."""
+        return self._run_id
+
     def emit(self, event: str, **fields: object) -> None:
         """Append one contract-valid record to the sink (contracts/events.v1.md).
 

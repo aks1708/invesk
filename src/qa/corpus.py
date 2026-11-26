@@ -165,7 +165,7 @@ def load_run(run_dir: Path) -> QARun:
                 source=_optional_string(item.get("source"), "source", "news.json"),
                 published=_optional_string(item.get("published"), "published", "news.json"),
                 summary=_optional_string(item.get("summary"), "summary", "news.json"),
-                content=content[:10000] if content else None,
+                content=content or None,
             )
         )
     return QARun(run_dir, report, profile, tuple(news))

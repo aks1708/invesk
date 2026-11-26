@@ -12,9 +12,8 @@ CORRECTIVE_TEXT_LIMIT: Final[int] = 4000
 def _news_line(item: NewsItem, source_number: int) -> str:
     """One NewsItem → a prompt line with a stable source token.
 
-    The summary and the article's page text ride along (first 10000
-    characters, FR3); the model is told to use them for depth, not to quote
-    them wholesale.
+    The summary and the full article text ride along (FR3); the model is told
+    to use them for depth, not to quote them wholesale.
     """
     about = f" [about: {item.related[0]}]" if item.related else ""
     line = (

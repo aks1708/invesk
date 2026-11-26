@@ -50,4 +50,10 @@ def test_news_research_remains_active_until_search_finishes(tmp_path, monkeypatc
 
     assert status == pipeline.EXIT_OK
     assert report == "report"
-    assert started == ["fund_extraction", "news_search", "synthesis", "report"]
+    assert started == [
+        "fund_extraction",
+        "news_search",
+        "news_dedup",
+        "synthesis",
+        "report",
+    ]

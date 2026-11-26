@@ -55,6 +55,8 @@ def _answer_markers(answer: str) -> set[str]:
             raise QAResponseError("citation numbers must be canonical positive decimals")
         found.update(str(int(value)) if value.isdigit() else value for value in values)
     if answer.count("[") != len(list(_BRACKET_RE.finditer(answer))) or answer.count("]") != len(list(_BRACKET_RE.finditer(answer))):
+        # Brackets are reserved for citations, so malformed markers must not
+        # slip through and later appear as if they had been validated.
         raise QAResponseError("unclosed or malformed citation marker")
     return found
 
@@ -104,10 +106,13 @@ def parse_qa_response(
         supplied = set(supplied_source_numbers)
         supplied_web = set(supplied_web_source_ids)
         if not citations:
-            raise QAResponseError("a substantive answer requires a citation")
+            if markers:
+                raise QAResponseError(
+                    "citation markers require matching source IDs in citations"
+                )
         if not set(news_citations) <= supplied or not set(web_citations) <= supplied_web:
             raise QAResponseError("citation was not supplied as evidence for this turn")
-        if markers != set(citation_ids):
+        if citations and markers != set(citation_ids):
             raise QAResponseError("citation markers do not match the citations array")
     return QAResponse(answer.strip(), tuple(citations), insufficient)
 

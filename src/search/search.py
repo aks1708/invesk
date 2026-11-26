@@ -18,7 +18,7 @@ import time
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Final, Protocol
 
 from src.core.events import Clock, EventEmitter
@@ -26,8 +26,6 @@ from src.core.models import FundProfile, NewsItem
 from src.search.queries import (
     MAX_HOLDING_QUERIES,
     MAX_SECTOR_QUERIES,
-    SUMMARY_QUERY,
-    TEXT_MAX_CHARS,
     SearchConfig,
     SearchQuery,
     build_queries,
@@ -117,7 +115,7 @@ def search_news(
     emitted from this thread in submission order, never from workers.
     """
     queries = build_queries(profile, max_searches=config.max_searches)
-    now = clock()
+    now = clock().astimezone(timezone.utc)
     start = (now - timedelta(days=config.window_days)).strftime(EXA_DATE_FORMAT)
     end = now.strftime(EXA_DATE_FORMAT)
 

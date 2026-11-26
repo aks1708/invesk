@@ -1,4 +1,4 @@
-# Contract: `events.jsonl` — contract version 2
+# Contract: `events.jsonl` — contract version 3
 
 This document's contract version is independent of the event payload's
 `schema_version`, which remains `2`.
@@ -29,13 +29,13 @@ line so the artifact is complete even if a run crashes.
 | Event | Extra fields |
 | --- | --- |
 | `run_started` | `fund` (string) |
-| `stage_completed` | Stage `fund_extraction` (FR2): `ticker`, `holdings`, `sectors`, `gaps` (counts). Stage `news_search` (FR3): `searches`, `ok`, `failed`, `results` (raw), `news` (after dedupe) (counts), `degraded` (bool — true only when every search failed in degrade mode). Stage `synthesis` (FR4): `news` (items fed to the prompt) (counts), `attempts` (1 or 2), `retried` (bool). |
-| `external_call` | `provider` (e.g. `yahoo.search`, `exa.search`, `ollama.gemma`), `latency_ms` (int), `status` (`ok\|error`); `request_id` only when the provider returns one (library calls omit it). Exa adds `entity` (the holding/sector queried) and, on error, `http_status` (int) when the provider returned one. Ollama adds `http_status` on error; it returns no request id. |
+| `stage_completed` | Stage `fund_extraction` (FR2): `ticker`, `holdings`, `sectors`, `gaps` (counts). Stage `news_search` (FR3): `searches`, `ok`, `failed`, `results` (raw), `news` (after URL dedupe) (counts), `degraded` (bool — true only when every search failed in degrade mode). Stage `news_dedup` (FR3b): `candidates`, `embedded`, `duplicate_pairs`, `groups`, `kept`, `dropped` (counts), `threshold`, `model`, `degraded`. Stage `qa_retrieval` (FR7): `method` (`lexical`), `lexical_candidates`. Stage `synthesis` (FR4): `news` (items fed to the prompt) (counts), `attempts` (1 or 2), `retried` (bool). |
+| `external_call` | `provider` (e.g. `yahoo.search`, `exa.search`, `ollama.embed`, `ollama.gemma`), `latency_ms` (int), `status` (`ok\|error`); `request_id` only when the provider returns one (library calls omit it). Q&A rewrite calls add `purpose: "query_rewrite"`. Exa adds `entity` (the holding/sector queried) and, on error, `http_status` (int) when the provider returned one. Ollama adds `http_status` on error; it returns no request id. |
 | `token_usage` | `provider`, `prompt_tokens`, `completion_tokens` (FR4+) |
 | `report_written` | `path` (FR5) |
 | `run_failed` | `error_code`, `detail` (free text, no secrets) |
 | `qa_started` | Q&A session start (FR7): `news` (collected item count, int), `model` (string) |
-| `qa_answered` | Successful Q&A turn (FR7): `citations` (array of saved-news source-number ints and/or web source-ID strings), `passages` (count supplied, int), `evidence_chars` (int), `latency_ms` (int), `attempts` (1–4 total model attempts), `insufficient` (bool); optional `web_search_attempted` (bool) |
+| `qa_answered` | Successful Q&A turn (FR7): `citations` (array of saved-news source-number ints and/or web source-ID strings), `passages` (count supplied, int), `evidence_chars` (int), `latency_ms` (int), `attempts` (1–4 answer-generation model attempts), `insufficient` (bool); optional `web_search_attempted` (bool) |
 | `qa_failed` | Failed Q&A session or turn (FR7): `error_code`, `detail` (free text, no secrets), `turn` (1-based int when failure is turn-specific; omitted for startup/session failures) |
 
 Q&A events use `stage: "qa"`. Q&A event payloads use the same common
@@ -43,10 +43,11 @@ Q&A events use `stage: "qa"`. Q&A event payloads use the same common
 mixed saved-news/web citation IDs; consumers that only process
 report-generation events can continue to ignore Q&A event names.
 
-Q&A does not emit `run_started`, `stage_completed`, `report_written`, or
-`run_failed`; it appends `qa_*`, `external_call`, and `token_usage` events to
-the existing run's `events.jsonl`. `qa_started` is emitted after the required
-artifacts are loaded and validated. A malformed response after the corrective
+Q&A does not emit `run_started`, `report_written`, or `run_failed`. Retrieval
+may emit `stage_completed` with `stage: "qa_retrieval"`; Q&A also appends
+`qa_*`, `external_call`, and `token_usage` events to the existing run's
+`events.jsonl`. `qa_started` is emitted after the required artifacts are loaded
+and validated. A malformed response after the corrective
 retry emits `qa_failed` with `error_code: "qa_response_invalid"` and fails that
 question request while leaving the browser app available. An Ollama provider
 failure emits `qa_failed` with `error_code: "ollama_unavailable"`; the API
@@ -54,8 +55,11 @@ returns an error for that request.
 Invalid question requests do not append a Q&A event.
 Artifact-loading failures also occur before `qa_started` and do not append a
 Q&A event; the API responds according to the browser API contract.
-Conditional web fallback calls emit `external_call` with `provider:
-exa.qa_search`. Event payloads never contain the query, result text, or API key.
+Conditional web fallback calls emit `external_call` with
+`provider: "exa.qa_search"`. Event payloads never contain the query, result
+text, or API key.
+Retrieval counts never include query text, article text, or URLs. Dedupe
+degraded-state events in report runs are for semantic news deduplication.
 
 ## Failure codes
 
